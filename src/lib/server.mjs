@@ -13,6 +13,7 @@ import { writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { apiBase, debug, delegateTools, dumpFile, host, imageModel, judgeEnabled, judgeModel, judgeTimeoutMs, port, providerID } from './config.mjs'
 import {
+  ANUNCIA_MIRADA,
   SERVER_TOOL_DEFS,
   applyFallback,
   withImageOutput,
@@ -37,7 +38,7 @@ import { MODELS } from './models.mjs'
 import { debugRaw, log, preview, warn } from './log.mjs'
 import { deepStripNulls, repairJsonControlChars } from './sanitize.mjs'
 import { AGENT_IMAGE_PATH, INFERENCE_PATH, SignInError, hydratedImageBody, loadSession, recallMedia, rememberMedia, resetSessionCache, upstreamChat, upstreamImage, upstreamMediaUpload } from './venice.mjs'
-import { IMAGE_SIZES, buildEditPrompt, buildPrompt, checkEditModel, checkModel, collectImage } from './image.mjs'
+import { IMAGE_MODELS, IMAGE_SIZES, buildEditPrompt, buildPrompt, checkEditModel, checkModel, collectImage } from './image.mjs'
 
 const json = (res, status, payload) => {
   res.writeHead(status, { 'content-type': 'application/json' })
@@ -66,13 +67,24 @@ async function readJson(req) {
 function modelList() {
   return {
     object: 'list',
-    data: Object.entries(MODELS).map(([id, model]) => ({
-      id,
-      object: 'model',
-      owned_by: providerID,
-      name: model.name,
-      context_length: model.context,
-    })),
+    data: [
+      ...Object.entries(MODELS).map(([id, model]) => ({
+        id,
+        object: 'model',
+        owned_by: providerID,
+        name: model.name,
+        context_length: model.context,
+      })),
+      // The generate models are served by `/v1/images/generations`: without them
+      // in the list a client cannot offer generation at all (measured on the
+      // OpenCode image tool, 2026-11-15).
+      ...Object.entries(IMAGE_MODELS).map(([id, model]) => ({
+        id,
+        object: 'model',
+        owned_by: providerID,
+        name: model.name,
+      })),
+    ],
   }
 }
 
@@ -464,7 +476,6 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
     if ((message.content ?? '').trim() && !message.serverCalls?.length) {
       log('  ~ hydrated step answered after the resend, keeping it')
       message.serverCallsRan = true
-      message.serverCallsRan = true
       // the look budget is spent: this reply is the answer, not another step
       viewRounds = 99
     }
@@ -567,6 +578,16 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
 
     let formatRetries = 0
     let noToolRetries = 0
+    // Prose written while the bytes were in front of the model. A retry resends
+    // without them, so this is the only copy left of a description already
+    // written; the model then guesses from the text instead (a picture of a fish
+    // became an alleyway and a human eye in the same turn).
+    // The only copy of a description already written with the bytes: a later
+    // lookup resends *without* them and the model then guesses from the text.
+    let proseConBytes = ''
+    if ((message.content ?? '').trim() && !ANUNCIA_MIRADA.test(message.content.trim())) {
+      proseConBytes = message.content.trim()
+    }
 
     // Up to two extra attempts while the reply is unhelpful. Every trigger is
     // structural (see shouldRetry); a reply that ends the turn right after a tool
@@ -686,6 +707,24 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
           log(`  ~ fin de vuelta: edited=${edited.mediaId} llamadas=0`)
           break
         }
+        // The prose written before the lookup is kept for later: the model wrote
+        // it with the bytes in front of it, and the code below clears the calls.
+        // `message.content` is already empty here (the calls were cleared): the
+        // prose the model wrote lives in the raw step text.
+        // The raw step may be a whole envelope: only its `content` is prose.
+        let stepEnvelope
+        try { stepEnvelope = JSON.parse(state.text) } catch { stepEnvelope = undefined }
+        const proseBefore = (message.content ?? '').trim()
+          || (typeof stepEnvelope?.content === 'string' ? stepEnvelope.content.trim() : '')
+        if (proseBefore && !ANUNCIA_MIRADA.test(proseBefore)) proseConBytes = proseBefore
+        // The envelope `content` may be empty while the model did write prose: the
+        // parse keeps only the envelope, so the raw text is the second source.
+        if (!proseConBytes) {
+          const crudo = (state.text ?? '').replace(/^```[a-zA-Z]*\s*/,'').replace(/```$/,'').trim()
+          const corte = crudo.search(/\{\s*"(content|status|tool_calls)"/)
+          const prosaCruda = (corte > 0 ? crudo.slice(0, corte) : '').trim()
+          if (prosaCruda && !ANUNCIA_MIRADA.test(prosaCruda)) proseConBytes = prosaCruda
+        }
         // A lookup is not an answer: the turn would reach the client as a call to
         // a tool the client does not have, with no text at all. It is resent at
         // once so the model closes with prose, and the call is not handed on.
@@ -715,17 +754,42 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
         if (!viewResponse.ok) break
         state = yield* collectStream(viewResponse.body, mapping, chunk, { stopServerLoop: true })
         const lookedAgain = read(state.text, state)
-        // The answer to a lookup that only asked to look again *is* the answer: it
-        // comes from a request that carried the bytes, and the generic retry path
-        // resends without them, where the model then guesses from the text
-        // ("an alleyway", "a human eye" for a picture of a fish). Measured on an
-        // image turn, 2026-08-15: two of three runs were replaced that way.
-        const lookedAgainOnly = soloPideMirar(state.text) || Boolean(lookedAgain.serverCalls?.length && !(lookedAgain.content ?? '').trim())
-        message = lookedAgain
-        if (lookedAgainOnly && (message.content ?? '').trim() && !message.serverCalls?.length) {
+        // The lookup may carry prose too ("voy a verla"): if it describes, it is
+        // worth as much as the step before, and it is saved before the generic
+        // retry path can replace it.
+        if ((lookedAgain.content ?? '').trim() && !ANUNCIA_MIRADA.test(lookedAgain.content.trim())) {
+          proseConBytes = lookedAgain.content.trim()
+        }
+        // The reply of a request that carried the bytes is the answer, even when
+        // it only asks to look again: the generic retry path resends *without*
+        // them and the model then guesses from the text ("an alleyway", "a human
+        // eye" for a picture of a fish; measured 2026-08-15, two of three runs).
+        // The prose written before the lookup is kept when the lookup itself has
+        // none: it was written with the bytes in front of the model.
+        // A lookup with nothing written beside it, when a description was already
+        // written with the bytes: that description is the answer, and another
+        // round without the bytes only makes the model doubt it has seen anything.
+        // A lookup that carries only an announcement ("ya esta cargada, la veo")
+        // is the same case as one with no prose: the description written with the
+        // bytes is the answer, and the announcement would close the turn with
+        // nothing said about the picture.
+        const lookedProse = (lookedAgain.content ?? '').trim()
+        const lookedIsAnnouncement = !lookedProse || ANUNCIA_MIRADA.test(lookedProse)
+        if (lookedAgain.serverCalls?.length && lookedIsAnnouncement && proseConBytes) {
+          message = { ...lookedAgain, content: proseConBytes }
           message.serverCallsRan = true
-          log('  ~ answered after looking again, keeping it')
+          message.status = 'done'
+          log('  ~ kept the description written with the bytes')
           break
+        }
+        message = lookedAgain
+        // A lookup with no prose is a step, not the answer: it goes round again
+        // with its result. At the bound it is answered with no tools at all.
+        if (lookedAgain.serverCalls?.length) {
+          message.serverCallsRan = true
+          message.status = 'continue'
+          log('  ~ lookup after the answer, going round once more')
+          continue
         }
         // Even with no tools the model sometimes emits the call anyway; at the
         // bound it must not be answered again. The pending client calls are kept.
