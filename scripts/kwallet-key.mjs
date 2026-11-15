@@ -1,44 +1,54 @@
 #!/usr/bin/env node
 /**
- * Reads the Chrome cookie key out of KWallet over D-Bus.
+ * Reads the Chrome cookie key out of KWallet.
  *
- * KDE keeps it in `kwalletd5`, not in gnome-keyring, so `secret-tool` finds
- * nothing even with the wallet unlocked. Prints the key length only unless
- * `--print` is passed.
+ * KDE keeps it in kwalletd, not in gnome-keyring, so `secret-tool` finds
+ * nothing even with the wallet unlocked. This also tries the argument orders
+ * `kwallet-query` accepts, because `-f` before or after the entry is not
+ * interchangeable across versions.
  *
  *   node scripts/kwallet-key.mjs           # probe
  *   node scripts/kwallet-key.mjs --print   # show the key
  */
-import { execFileSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 
 const print = process.argv.includes('--print')
-const wallets = ['kdewallet', 'kdewallet5', 'Chrome Safe Storage', 'Chromium Safe Storage']
+const wallets = ['kdewallet', 'kdewallet5']
 const folders = ['', 'Passwords', 'chrome', 'Chrome']
-const entries = ['Chrome Safe Storage', 'Chromium Safe Storage', 'Chrome']
+const entries = ['Chrome Safe Storage', 'Chrome', 'Chromium Safe Storage', 'Chromium']
 
-const run = (bin, args) => {
-  try {
-    return execFileSync(bin, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()
-  } catch (error) {
-    return ''
-  }
+const run = (...args) => {
+  const result = spawnSync('kwallet-query', args, { encoding: 'utf8' })
+  return { out: (result.stdout ?? '').trim(), err: (result.stderr ?? '').trim(), code: result.error?.code ?? result.status }
 }
 
 for (const wallet of wallets) {
   for (const folder of folders) {
-    const listing = run('kwallet-query', ['-l', ...(folder ? ['-f', folder] : []), wallet])
-    if (!listing) continue
-    console.log(`wallet ${JSON.stringify(wallet)} folder ${JSON.stringify(folder)}: ${listing.split('\n').filter(Boolean).length} entries`)
+    const list = run('-l', ...(folder ? ['-f', folder] : []), wallet)
+    if (list.code === 'ENOENT') {
+      console.log('kwallet-query MISSING (apt install kwalletmanager)')
+      process.exit(0)
+    }
+    if (!list.out) {
+      if (list.err) console.log(`wallet ${wallet} folder ${JSON.stringify(folder)}: ${list.err.split('\n')[0]}`)
+      continue
+    }
+    console.log(`wallet ${wallet} folder ${JSON.stringify(folder)}: ${list.out.split('\n').filter(Boolean).length} entries`)
     for (const entry of entries) {
-      if (!listing.includes(entry)) continue
-      const value = run('kwallet-query', ['-r', entry, ...(folder ? ['-f', folder] : []), wallet])
-      if (!value) continue
-      console.log(`  ${entry} -> ${value.length} chars`)
-      if (print) console.log(`  value: ${JSON.stringify(value)}`)
+      if (!list.out.includes(entry)) continue
+      const variants = [
+        ['-r', entry, ...(folder ? ['-f', folder] : []), wallet],
+        ['-r', entry, wallet, ...(folder ? ['-f', folder] : [])],
+        [...(folder ? ['-f', folder] : []), '-r', entry, wallet],
+      ]
+      for (const args of variants) {
+        const read = run(...args)
+        console.log(`  read ${JSON.stringify(entry)} via ${args.join(' ')} -> ${read.out ? `${read.out.length} chars` : `none (${read.err.split('\n')[0] || read.code})`}`)
+        if (read.out) {
+          if (print) console.log(`  value: ${JSON.stringify(read.out)}`)
+          break
+        }
+      }
     }
   }
 }
-
-const objects = run('qdbus', [])
-if (objects.includes('kwallet')) console.log('kwalletd present on the session bus')
-else console.log('kwalletd NOT on the session bus')
