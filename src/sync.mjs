@@ -44,7 +44,7 @@ if (args.includes('--remove')) {
         {
           name: model.name,
           tool_call: true,
-          reasoning: model.reasoning,
+          capabilities: { reasoning: { supported: model.reasoning } },
           limit: { context: model.context, output: model.output },
         },
       ]),
