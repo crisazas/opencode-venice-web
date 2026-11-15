@@ -113,6 +113,7 @@ The proxy exposes:
 | `POST /v1/chat/completions` | streaming and non-streaming chat, with tool emulation; user turns accept `image_url` parts (data URLs or a cached `media_id`) |
 | `POST /v1/images/generations` | text to image with the free image models (OpenAI shape) |
 | `POST /v1/images/edits` | image to image with a prompt and the free edit models (OpenAI shape) |
+| `GET /v1/media/<media_id>` | bytes of an edited image, for clients with no `view_media` tool |
 | `POST /reload` | drop cached token/attestation (after re-login) |
 
 Full details, including the exact request/response shapes and the tool-emulation protocol, are in [docs/PROTOCOL.md](docs/PROTOCOL.md).
@@ -201,6 +202,8 @@ curl -s http://127.0.0.1:3456/v1/images/edits \
 The edit models are a separate list from the generate ones, and a generate model is a `400`: `firered-image-edit` (default) holds identity and fine detail, `qwen-edit-uncensored` is the anime one and follows composition more loosely. `image` must be a base64 data URL (an https URL is not fetched), and the prompt is required. `size` is accepted and passed as an aspect instruction.
 
 The route uploads the reference to the media endpoint, sends it to the agent as an `input_image` part with the hydration pre-answered, so it calls its own `edit_image` tool on the first turn instead of asking for the bytes first. Parts the instruction does not mention are asked to stay unchanged, and measurements keep the background and framing while the named area changes. One edit takes roughly 6-9 s and 150-300 kB.
+
+A chat turn that edits a picture does not hand a `view_media` call to the client, which has no such tool: the reply carries a markdown image pointing at `GET /v1/media/<media_id>` and keeps `finish_reason: stop`, so the picture renders in any OpenAI client.
 
 Two things the route does to stay usable under Venice's limits: the upload retries a `429` with a growing wait and reuses a recent `media_id` for the same bytes, and the hydration is answered up front so an edit costs one agent turn instead of two.
 
