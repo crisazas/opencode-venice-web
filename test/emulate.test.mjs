@@ -19,6 +19,7 @@ import {
   RESULT_REMINDER,
   SERVER_TOOL_DEFS,
   buildJudgeRequest,
+  bareExpression,
   delegatedCallTarget,
   inspectCalls,
   isEmptyAnswer,
@@ -743,4 +744,24 @@ test('an edit result is handed over as a media url, not as a view_media call', (
 test('shouldRetry: a lone server call is not an empty reply', () => {
   const solo = { content: '', tool_calls: null, serverCalls: [{ function: { name: 'view_media' } }], sawEnvelope: true, status: 'continue' }
   assert.equal(shouldRetry({ message: solo, lastRole: 'user', available: [] }).retry, false)
+})
+
+test('a bash wrapping only arithmetic is handed to the server calculator', () => {
+  const call = (command) => ({ function: { name: 'bash', arguments: JSON.stringify({ command }) } })
+  for (const command of ['echo $((391 * 17 + 44))', 'echo $[391*17+44]', 'python3 -c "print(1+2)"', '391 * 17 + 44', '2']) {
+    assert.equal(delegatedCallTarget(call(command), ['bash']), 'calculator', command)
+  }
+  // a real command keeps going to the client
+  for (const command of ['ls -la', 'git status', 'echo hola', 'npm test', '']) {
+    assert.equal(delegatedCallTarget(call(command), ['bash']), undefined, command)
+  }
+  // not delegated this turn
+  assert.equal(delegatedCallTarget(call('1+1'), []), undefined)
+})
+
+test('bareExpression peels the wrapper and rejects what is not arithmetic', () => {
+  assert.equal(bareExpression('echo $((2*3))'), '2*3')
+  assert.equal(bareExpression('python3 -c "print(2*3)"'), '2*3')
+  assert.equal(bareExpression('  '), undefined)
+  assert.equal(bareExpression('+-*/'), undefined)
 })

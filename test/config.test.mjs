@@ -13,9 +13,9 @@ const list = async (value) => {
   return (await import(`../src/lib/config.mjs?${value ?? 'unset'}-${Math.random()}`)).delegateTools
 }
 
-test('by default webfetch and read are delegated, grep is not', async () => {
-  assert.deepEqual(await list(undefined), ['webfetch', 'read'])
-  assert.deepEqual(await list(''), ['webfetch', 'read'])
+test('by default webfetch, read and bash are delegated, grep is not', async () => {
+  assert.deepEqual(await list(undefined), ['webfetch', 'read', 'bash'])
+  assert.deepEqual(await list(''), ['webfetch', 'read', 'bash'])
 })
 
 test('an explicit list replaces the default, grep included when asked for', async () => {

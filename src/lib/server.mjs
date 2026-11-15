@@ -19,6 +19,7 @@ import {
   buildJudgeRequest,
   countTokens,
   delegatedCallTarget,
+  bareExpression,
   inspectCalls,
   judgeDecision,
   parseJudgeVerdict,
@@ -523,10 +524,16 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
             } catch {
               args = {}
             }
-            // the server reads a URL, whatever the client called the argument
-            call.function.arguments = JSON.stringify({ url: args.url ?? args.path })
+            if (server === 'calculator') {
+              // the server takes the bare expression, not the shell wrapper
+              call.function.arguments = JSON.stringify({ expression: bareExpression(args.command) })
+            } else {
+              // the server reads a URL, whatever the client called the argument
+              call.function.arguments = JSON.stringify({ url: args.url ?? args.path })
+            }
+            const pedida = call.function.name
             call.function.name = server
-            log(`  ~ ${call.function.name} handed to the server (client asked for a URL)`)
+            log(`  ~ ${server} handed to the server (client asked for ${pedida})`)
           }
           parsed.serverCalls = [...(parsed.serverCalls ?? []), ...toServer]
           const rest = parsed.tool_calls.filter((call) => !toServer.includes(call))

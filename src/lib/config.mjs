@@ -82,10 +82,13 @@ export const judgeTimeoutMs = Number(process.env.VENICE_WEB_JUDGE_TIMEOUT ?? 45_
  * model reports the code as missing instead of falling back. Measured in
  * docs/ADAPTING.md (fourth measurement).
  *
+ * `bash` is delegated only when the command is nothing but an arithmetic
+ * expression (`bareExpression`); such a call becomes `calculator`.
+ *
  * `VENICE_WEB_DELEGATE` overrides the list, comma separated; `0` (or `none`)
  * turns delegation off. `grep` can be asked for explicitly.
  */
-const DELEGATE_DEFAULT = ['webfetch', 'read']
+const DELEGATE_DEFAULT = ['webfetch', 'read', 'bash']
 
 function delegateList(raw) {
   if (raw === undefined || raw === '') return DELEGATE_DEFAULT

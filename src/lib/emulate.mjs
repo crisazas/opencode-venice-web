@@ -397,6 +397,8 @@ export const DELEGATED_TOOLS = new Map([
   ['grep', 'context_grep'],
   // conditional: only a `read` whose path is a URL (see delegatedCallTarget)
   ['read', 'web_scrape'],
+  // conditional: only a `bash` whose command is a bare arithmetic expression
+  ['bash', 'calculator'],
 ])
 
 /** The server tool that replaces `name`, or `undefined` when there is none. */
@@ -410,18 +412,41 @@ export function delegatedServerTool(name) {
  * and passed the URL, so the prompt alone does not settle it. Returns the server
  * tool the call should become, or `undefined`.
  */
+const ARITHMETIC = /^[\d\s()+*\-/.%]+$/
+
+/**
+ * The arithmetic a `bash` call is only wrapping, or `undefined`. Measured: with
+ * `calculator` offered the model still reaches for `bash` and wraps the sum in
+ * `echo $((...))` or `python3 -c "print(...)"`, so the wrapper is peeled off. The
+ * call is only worth handing over when what is left is pure arithmetic; a real
+ * command has letters in it.
+ */
+export function bareExpression(command) {
+  const text = String(command ?? '').trim()
+  // `echo $((...))` and `echo $[ ... ]` are the two wrappers the model used
+  const inner = /^echo\s+\$\(\((.*)\)\)$/.exec(text)?.[1]
+    ?? /^echo\s+\$\[(.*)\]$/.exec(text)?.[1]
+    ?? /^python3?\s+-c\s+["']print\((.*)\)["']$/.exec(text)?.[1]
+    ?? text
+  const cleaned = inner.replace(/\s+/g, '')
+  if (!cleaned || !ARITHMETIC.test(cleaned)) return undefined
+  // `-` and `+` alone are not arithmetic, and `1` is; at least one digit is needed
+  return /\d/.test(cleaned) ? cleaned : undefined
+}
+
 export function delegatedCallTarget(call, delegate = []) {
   const name = call?.function?.name
   if (!name || !delegate.includes(name)) return undefined
   const server = DELEGATED_TOOLS.get(name)
   if (!server) return undefined
-  if (name !== 'read') return server
+  if (name !== 'read' && name !== 'bash') return server
   let args
   try {
     args = JSON.parse(call.function.arguments ?? '{}')
   } catch {
     return undefined
   }
+  if (name === 'bash') return bareExpression(args?.command) ? server : undefined
   return /^https?:\/\//.test(String(args?.path ?? '')) ? server : undefined
 }
 
@@ -499,7 +524,7 @@ export function toVeniceRequest(body, { skipServer = false, delegate = [] } = {}
   // `read` instead of `web_scrape`).
   if (delegated.length) {
     instructions.push(
-      `Venice runs some tools itself, they are NOT in the list below: use \`web_scrape\` for http(s) URLs instead of \`read\`, and \`context_grep\` to search the conversation instead of \`grep\`.`,
+      `Venice runs some tools itself, they are NOT in the list below: use \`web_scrape\` for http(s) URLs instead of \`read\`, \`calculator\` for a bare arithmetic expression instead of \`bash\`, and \`context_grep\` to search the conversation instead of \`grep\`.`,
     )
   }
   const messages = []
