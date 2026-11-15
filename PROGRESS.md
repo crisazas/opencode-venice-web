@@ -62,10 +62,11 @@ Medición en vivo con Chrome headless (puerto 9222) y su consola, sin adivinar:
 
 ## Falta
 
-- Falta una edición real de punta a punta desde OpenCode (subir imagen, pedir el cambio) para ver la imagen renderizada; aquí solo se probó la ruta y los tests.
+- ~~Falta una edición real de punta a punta~~ **Hecha por la ruta OpenAI** (`POST /v1/images/edits`): 320x240, 126.984 bytes subidos, `reference` en 0,6 s, edición en 5,4 s, 114.114 bytes de vuelta distintos del original. **Falta la misma prueba desde OpenCode** (adjuntar la imagen en el chat y ver el render en la interfaz).
+- **Turno de chat que edita: medido**, 3/3 antes y 3/3 después: `edit_image` con el `media_id` correcto, `fin de vuelta: edited=<id>`, markdown `/v1/media/<id>`, `finish_reason: stop`, y los bytes servidos con `content-type: image/png`. 1 de 3 falló con `500 Failed to parse hydration arguments` y el cliente recibía un `stream_error`; arreglado en `server.mjs` (reenvío único sin la hidratación cuando el stream no es terminal y la hidratación llevaba ficheros), commit `d25afed`.
 - `grep` -> `context_grep` **medido y sale mal por defecto**: busca en la conversación, no en el árbol de ficheros. Turno con el patrón en la conversación: 3/3 el servidor ejecuta `context_grep`, 4 coincidencias, respuesta correcta. Turno con el patrón solo en disco (`IMAGE_SIZES`): 3/3 encuentra solo el propio prompt y el modelo contesta que el código no está en el contexto. Siguiente paso: sacar `grep` de la lista por defecto (`config.mjs`) y dejarlo tras `VENICE_WEB_DELEGATE=grep`, o servir el árbol por HTTP local para que el patrón sea una URL.
 - `debug.log` ya rota a `debug.log.1` a los 5 MB (`VENICE_WEB_DEBUG_MAX_BYTES`), pero la rotación es síncrona dentro de la petición: en un pico puede añadir latencia.
-- `edit_image` anunciado en cada turno con imagen: sin medir en esta sesión.
+- ~~`edit_image` anunciado en cada turno con imagen~~ **medido**: el turno con imagen se anuncia con exactamente 2 tools `[view_media,edit_image]` y sin las del cliente, y el modelo llama a `edit_image` con el `media_id` que se le dio.
 
 ## Siguiente
 
