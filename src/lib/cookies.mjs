@@ -151,29 +151,36 @@ function candidateKeys(browser) {
 /**
  * Keys held by KWallet, which is where KDE sessions keep the browser secret.
  * `kwallet-query -l` names the entries of a folder, so the folders worth
- * looking at are the ones that list a browser entry.
+ * looking at are the ones that list a browser entry. Reading takes the entry
+ * and its folder before the wallet (`-r <entry> -f <folder> <wallet>`); the
+ * other orders are tried too because they differ between versions.
  */
 function kwalletKeys(browser) {
   const keys = []
   const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome', 'Chromium']
+  const read = (args) => {
+    try {
+      const value = execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      if (value) keys.push(value)
+    } catch {
+      /* keep trying */
+    }
+  }
   for (const wallet of ['kdewallet', 'kdewallet5']) {
     for (const folder of ['', 'Passwords', 'chrome', 'Chrome']) {
+      const folderArgs = folder ? ['-f', folder] : []
       let listing = ''
       try {
-        const folderArgs = folder ? ['-f', folder] : []
         listing = execFileSync('kwallet-query', ['-l', ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
       } catch {
         continue
       }
       for (const entry of entries) {
         if (!listing.includes(entry)) continue
-        try {
-          const folderArgs = folder ? ['-f', folder] : []
-          const value = execFileSync('kwallet-query', ['-r', entry, ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-          if (value) keys.push(value)
-        } catch {
-          /* keep trying */
-        }
+        read(['-r', entry, ...folderArgs, wallet])
+        if (!folder) continue
+        read(['-r', entry, wallet, ...folderArgs])
+        read([...folderArgs, '-r', entry, wallet])
       }
     }
   }
