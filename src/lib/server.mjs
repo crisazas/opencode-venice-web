@@ -603,6 +603,16 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
         const ids = mapping.mediaIds.length ? mapping.mediaIds : [...(hydration?.media_ids ?? [])]
         let next = mapping.request
         lastRequest = next
+        // The bytes of every id the turn knows, from the hydration or from the
+        // cache: a `view_media` resent without them only earns the note "the image
+        // was visible during this turn", and the model then answers that it cannot
+        // see anything (measured on a fresh session, 2026-11-15).
+        const ficherosDeTurno = [...filesDeHidratacion]
+        for (const id of ids) {
+          if (ficherosDeTurno.some((file) => file.field === `media.${id}`)) continue
+          const cached = await recallMedia(id)
+          if (cached) ficherosDeTurno.push({ field: `media.${id}`, mimeType: cached.mimeType, data: cached.data })
+        }
         // The edit goes first when both kinds ride in the same envelope: a lookup
         // before it adds nothing (the model already has the image) and an edit
         // left for later was the one lost to the empty-reply path.
@@ -701,7 +711,7 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
         if (forceAnswer) {
           next = withRetryReminder({ ...next, tools: [] }, wantsEdit ? EDIT_ANSWER_REMINDER : VIEW_MEDIA_ANSWER_REMINDER)
         }
-        const viewResponse = await upstreamChat(next, INFERENCE_PATH, signal)
+        const viewResponse = await upstreamChat(next, INFERENCE_PATH, signal, ficherosDeTurno)
         if (!viewResponse.ok) break
         state = yield* collectStream(viewResponse.body, mapping, chunk, { stopServerLoop: true })
         message = read(state.text, state)
