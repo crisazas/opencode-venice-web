@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Reads the Chrome Safe Storage secret out of kdewallet over D-Bus.
-// `kwallet-query` and `entryList` are unreliable on some builds, so known
-// entry names are tried directly in each folder the wallet reports.
+//
+// `kwallet-query` and `entryList` are broken on some builds, and folder names
+// come back glued to entry names, so this enumerates folders with readEntryList
+// and falls back to known names.
 import { spawnSync } from 'node:child_process'
 
 const run = (...args) => {
@@ -19,15 +21,15 @@ const handle = open.out
 console.log('open ->', JSON.stringify(handle), open.err)
 if (!handle || handle === '-1') process.exit(0)
 
-const folders = run(svc, obj, `${iface}.folderList`, handle, app)
-console.log('folderList ->', JSON.stringify(folders.out))
+for (const folder of ['Chrome', 'Keys', 'Passwords']) {
+  const list = run(svc, obj, `${iface}.readEntryList`, handle, folder, app)
+  console.log(`readEntryList ${folder} ->`, JSON.stringify(list.out), list.err)
+}
 
-const names = ['Chrome Safe Storage', 'Chrome', 'Chromium', 'Chrome Keys']
-for (const folder of folders.out.split(/\s+/).filter(Boolean)) {
-  for (const entry of names) {
+for (const folder of ['Chrome', 'Keys']) {
+  for (const entry of ['Chrome Safe Storage', 'Chrome', 'Chromium']) {
     const value = run(svc, obj, `${iface}.readPassword`, handle, folder, entry, app)
-    const ok = value.out && !/^The folder|does not exist|not found/i.test(value.out)
-    console.log(`  ${folder}/${entry} -> ${ok ? `${value.out.length} chars, starts ${JSON.stringify(value.out.slice(0, 6))}` : 'none'}`)
+    console.log(`  ${folder}/${entry} -> ${value.out ? `${value.out.length} chars ${JSON.stringify(value.out.slice(0, 6))}` : 'none'}`)
   }
 }
 
