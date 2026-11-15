@@ -945,7 +945,7 @@ function soloPideMirar(texto) {
   return leido.tool_calls.every((call) => ['view_media', 'hydrate_content'].includes(call?.function?.name))
 }
 
-function looksLikeEnvelope(value) {
+export function looksLikeEnvelope(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   if ('tool_calls' in value) return true
   return 'status' in value && 'content' in value
@@ -953,31 +953,40 @@ function looksLikeEnvelope(value) {
 
 // Only the tail is inspected: leaked envelopes always come last, and a JSON the
 // assistant is deliberately showing mid-answer stays untouched.
-function stripEnvelope(text) {
+export function stripEnvelope(text) {
   if (!text) return text
   const trimmed = text.trimEnd()
 
   const fenced = trimmed.match(/```[a-zA-Z]*\s*\n([\s\S]*?)```$/)
   if (fenced) {
-    try {
-      if (looksLikeEnvelope(JSON.parse(fenced[1].trim()))) {
-        const kept = trimmed.slice(0, fenced.index).trim()
-        if (kept) return kept
-      }
-    } catch {}
+    const kept = tailWithoutEnvelope(trimmed, fenced[1], fenced.index)
+    if (kept) return kept
   }
 
   const bare = trimmed.match(/(?:^|\n)(\{[\s\S]*\})$/)
   if (bare) {
-    try {
-      if (looksLikeEnvelope(JSON.parse(bare[1].trim()))) {
-        const kept = trimmed.slice(0, bare.index).trim()
-        if (kept) return kept
-      }
-    } catch {}
+    const kept = tailWithoutEnvelope(trimmed, bare[1], bare.index)
+    if (kept) return kept
   }
 
   return trimmed
+}
+
+/**
+ * `text` up to `index` when the candidate tail is a leaked envelope, else
+ * undefined. A tail that does not parse is reported: the envelope stays visible
+ * in the answer, and knowing why is the only way to fix the parser.
+ */
+export function tailWithoutEnvelope(text, candidate, index) {
+  let parsed
+  try {
+    parsed = JSON.parse(candidate.trim())
+  } catch (error) {
+    log(`  ~ envelope tail left in the answer: ${error.message}`)
+    return undefined
+  }
+  if (!looksLikeEnvelope(parsed)) return undefined
+  return text.slice(0, index).trim() || undefined
 }
 
 /**

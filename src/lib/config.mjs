@@ -47,6 +47,8 @@ export const attestationTtlMs = 5 * 60 * 1000
 export const providerID = process.env.VENICE_WEB_PROVIDER_ID ?? 'venice-web'
 
 export const debug = !!process.env.VENICE_WEB_DEBUG
+/** `debug.log` is rotated once it passes this size (see src/lib/log.mjs). */
+export const debugLogMaxBytes = Number(process.env.VENICE_WEB_DEBUG_MAX_BYTES ?? 5 * 1024 * 1024)
 export const dumpFile = process.env.VENICE_WEB_DUMP
 
 /**

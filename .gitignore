@@ -12,3 +12,7 @@ npm-debug.log*
 .idea/
 .vscode/
 *.tgz
+
+# stray backups
+*.bak
+debug.log.1

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { collectStream } from '../src/lib/server.mjs'
+import { collectStream, stripEnvelope, tailWithoutEnvelope } from '../src/lib/server.mjs'
 import { NATIVE_CALL_REMINDER, preferAnswer, serverLoopMessage, shouldRetry } from '../src/lib/emulate.mjs'
 
 const sse = (events, { close = true } = {}) => {
@@ -79,4 +79,38 @@ test('preferAnswer: any real reply beats a stopped loop', () => {
   const answer = { content: 'Toplam 20', tool_calls: null, sawEnvelope: true }
   assert.equal(preferAnswer(answer, serverLoopMessage()), true)
   assert.equal(preferAnswer(serverLoopMessage(), answer), false)
+})
+
+test('stripEnvelope drops a leaked fenced envelope and keeps the prose', () => {
+  assert.equal(stripEnvelope('El titulo es X.\n```json\n{"content":"","status":"continue","tool_calls":[]}\n```'), 'El titulo es X.')
+})
+
+test('stripEnvelope drops a bare leaked envelope', () => {
+  assert.equal(stripEnvelope('Ya esta.\n{"content":"hecho","status":"done"}'), 'Ya esta.')
+})
+
+test('stripEnvelope leaves a tail that is not an envelope alone', () => {
+  const text = 'Mira este JSON:\n```json\n{"a":1}\n```'
+  assert.equal(stripEnvelope(text), text)
+  assert.equal(stripEnvelope('solo prosa'), 'solo prosa')
+  assert.equal(stripEnvelope(''), '')
+})
+
+test('stripEnvelope leaves an unparseable tail visible and logs why', () => {
+  // the tail is envelope-shaped but has a trailing comma, so JSON.parse throws:
+  // the text is returned whole and the reason is logged instead of swallowed
+  const text = 'Prosa.\n{"content":"x","status":"done",}'
+  const lines = []
+  const original = console.log
+  console.log = (...parts) => lines.push(parts.join(' '))
+  try {
+    assert.equal(stripEnvelope(text), text)
+  } finally {
+    console.log = original
+  }
+  assert.match(lines.join('\n'), /envelope tail left in the answer/)
+})
+
+test('tailWithoutEnvelope keeps nothing when there is no prose before it', () => {
+  assert.equal(tailWithoutEnvelope('{"content":"","status":"continue"}', '{"content":"","status":"continue"}', 0), undefined)
 })
