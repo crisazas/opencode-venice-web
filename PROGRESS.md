@@ -63,6 +63,8 @@ Medición en vivo con Chrome headless (puerto 9222) y su consola, sin adivinar:
 ## Falta
 
 - Falta una edición real de punta a punta desde OpenCode (subir imagen, pedir el cambio) para ver la imagen renderizada; aquí solo se probó la ruta y los tests.
+- `grep` -> `context_grep` delegado pero **sin medir**: `context_grep` busca en la conversación, no en el árbol de ficheros. Antes de dejarlo por defecto hay que ver si OpenCode puede usar la respuesta; si no, sacarlo de `delegateTools`.
+- `debug.log` ya rota a `debug.log.1` a los 5 MB (`VENICE_WEB_DEBUG_MAX_BYTES`), pero la rotación es síncrona dentro de la petición: en un pico puede añadir latencia.
 - `edit_image` anunciado en cada turno con imagen: sin medir en esta sesión.
 
 ## Siguiente

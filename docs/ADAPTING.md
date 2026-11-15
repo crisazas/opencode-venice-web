@@ -106,7 +106,10 @@ not a refusal, so it is not a criterion for what may be delegated.
 What the tool returns is not what a client tool would return (`web_scrape` gives
 an object, `grep` gives matches over the *conversation*), so a delegated tool
 only fits when the client accepts a server-shaped result. That is true for
-`webfetch` and `grep` in OpenCode: both are read-only lookups.
+`webfetch`, but **`grep` is not settled**: `context_grep` searches the
+conversation, not the file tree, so a pattern that only exists on disk finds
+nothing. It is delegated today on the strength of "the server ran it", not on the
+strength of the client being able to use the answer.
 
 ## Result of the second measurement (naming the server tool)
 
