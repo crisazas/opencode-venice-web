@@ -37,6 +37,12 @@ const NO_KEYRING_ITEM =
 
 const profiles = (name) => (name ? [name] : ['Default', 'Profile 1', 'Profile 2', 'Profile 3'])
 
+/** True when a stray dir name looks like this browser, e.g. `chrome-perfil`. */
+function familyMatch(named, browser) {
+  const alias = browser.linux.split('/').pop().toLowerCase().replace(/-stable$/, '').replace(/^google-/, '').replace(/-browser$/, '')
+  return named.includes(alias)
+}
+
 /**
  * True when the profile DB was encrypted by this browser family. Every Chromium
  * build writes `v10`/`v11` there, and the family is settled by whether the
@@ -65,12 +71,15 @@ function sameProduct(dir, browser) {
  */
 export function strayProfileDirs(browser) {
   const dirs = []
-  // Only dirs that look like a profile of this browser: a matching name, or a
-  // `__client` cookie encrypted in the Chromium `v10`/`v11` format. The label is
-  // cosmetic; whether the cookie decrypts is what decides.
+  // Only dirs that belong to this browser: a matching name, or a directory that
+  // literally is another browser's own config dir (those are covered for that
+  // browser already, so they are skipped here to keep the label honest).
   const wanted = browser.linux.split('/').pop().toLowerCase().replace(/-stable$/, '')
   // Loose alias so a temp `chrome-perfil` matches Chrome without matching every family.
   const alias = wanted.replace(/^google-/, '').replace(/-browser$/, '')
+  const others = Object.values(BROWSERS)
+    .map((other) => other.linux.split('/').pop().toLowerCase())
+    .filter((name) => name !== wanted)
   const roots = [path.join(homedir(), '.config'), tmpdir(), path.join(tmpdir(), 'opencode')]
   const isProfile = (dir) =>
     existsSync(path.join(dir, 'Default', 'Cookies')) || existsSync(path.join(dir, 'Local State'))
@@ -89,7 +98,10 @@ export function strayProfileDirs(browser) {
       // `~/.config/<exact browser dir>` is already covered by the caller; only
       // keep same-family strays here (e.g. `google-chrome-headless`, a temp
       // `chrome-perfil`, or a Brave profile under /tmp/opencode).
-      if (named.includes(alias) || sameProduct(dir, browser)) dirs.push(dir)
+      if (others.includes(named)) continue
+      // A dir named after the browser is enough; otherwise it must at least
+      // carry the browser name, so a Chrome temp profile is not also Brave's.
+      if (named.includes(alias) || (sameProduct(dir, browser) && familyMatch(named, browser))) dirs.push(dir)
     }
   }
   return dirs
