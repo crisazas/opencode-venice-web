@@ -25,6 +25,9 @@ export const IMAGE_MODELS = {
 
 export const DEFAULT_IMAGE_MODEL = 'z-image-turbo'
 
+/** Ids that `/v1/models` advertises as image output, so a client can pick one. */
+export const IMAGE_MODEL_IDS = Object.keys(IMAGE_MODELS)
+
 /**
  * Image *editing* models. The generate models above are not in this list: the
  * agent's `edit_image` tool has its own, and only these two are free.

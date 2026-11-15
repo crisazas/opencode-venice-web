@@ -13,6 +13,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { port, providerID } from './lib/config.mjs'
 import { DEFAULT_MODEL, DEFAULT_SMALL_MODEL, MODELS } from './lib/models.mjs'
+import { DEFAULT_IMAGE_MODEL, IMAGE_MODELS } from './lib/image.mjs'
 import { log, warn } from './lib/log.mjs'
 
 const args = process.argv.slice(2)
@@ -38,22 +39,47 @@ if (args.includes('--remove')) {
     name: 'Venice Web (unlimited)',
     npm: '@ai-sdk/openai-compatible',
     options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: providerID },
-    models: Object.fromEntries(
-      Object.entries(MODELS).map(([id, model]) => [
-        id,
-        {
-          name: model.name,
-          tool_call: true,
-          capabilities: { reasoning: { supported: model.reasoning } },
-          limit: { context: model.context, output: model.output },
-        },
-      ]),
-    ),
+    models: {
+      ...Object.fromEntries(
+        Object.entries(MODELS).map(([id, model]) => [
+          id,
+          {
+            name: model.name,
+            tool_call: true,
+            capabilities: {
+              reasoning: { supported: model.reasoning },
+              // The chat models read pictures; the vision one is the only route
+              // an image turn takes (see models.mjs `IMAGE_MODEL`).
+              input: ['text', 'image'],
+              output: ['text'],
+            },
+            limit: { context: model.context, output: model.output },
+          },
+        ]),
+      ),
+      // The generate models are listed as their own entries with image output:
+      // without one in the config OpenCode cannot ask this provider for a
+      // picture at all (`experimental.image_generate` needs a target model).
+      ...Object.fromEntries(
+        Object.entries(IMAGE_MODELS).map(([id, model]) => [
+          id,
+          {
+            name: model.name,
+            tool_call: false,
+            capabilities: { input: ['text'], output: ['image'] },
+          },
+        ]),
+      ),
+    },
   }
   if (args.includes('--default')) {
     config.model = `${providerID}/${DEFAULT_MODEL}`
     config.small_model = `${providerID}/${DEFAULT_SMALL_MODEL}`
   }
+  // The image tool needs a target: the generate model is named here so the
+  // client does not fall back to a chat model, which has no image output.
+  config.experimental ??= {}
+  config.experimental.image_generate ??= { model: `${providerID}/${DEFAULT_IMAGE_MODEL}` }
 }
 
 mkdirSync(path.dirname(configPath), { recursive: true })
