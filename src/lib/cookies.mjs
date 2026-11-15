@@ -29,6 +29,9 @@ const COOKIE_HOSTS = ['.clerk.venice.ai', 'clerk.venice.ai', '.venice.ai', 'veni
 const NO_SECRET_TOOL =
   'secret-tool is missing, so the keyring key cannot be read (install libsecret-tools), or pass --cookie/--ua'
 
+const NO_KEYRING_ITEM =
+  'the cookie is keyring-encrypted but no keyring key was found (unlock the keyring in your desktop session; on KDE also try `kwallet-query -l kdewallet`), or pass --cookie/--ua'
+
 const profiles = (name) => (name ? [name] : ['Default', 'Profile 1', 'Profile 2', 'Profile 3'])
 
 /**
@@ -116,23 +119,30 @@ export function candidatePaths(browser, profile, userDataDir) {
 }
 
 /**
- * The OS key the browser used for its cookie DB.
+ * Every key worth trying for a cookie DB, in order: the macOS Keychain, the
+ * Linux keyring under each plausible label, then the no-keyring default.
  *
- * On Linux this is `secret-tool lookup` against the keyring. `v11` rows are
- * always keyring-encrypted, so when `secret-tool` is missing we say so instead
- * of returning `peanuts` and failing with an opaque bad-decrypt.
+ * Labels differ per desktop and browser build, and a closed KWallet makes
+ * `secret-tool` return nothing at all, so all of them are attempted and the
+ * caller keeps whichever one actually decrypts.
  */
-function passwordFor(browser) {
+function candidateKeys(browser) {
   if (process.platform === 'darwin') {
-    return execFileSync('security', ['find-generic-password', '-s', browser.keychain, '-w'], { encoding: 'utf8' }).trim()
+    return [execFileSync('security', ['find-generic-password', '-s', browser.keychain, '-w'], { encoding: 'utf8' }).trim()]
   }
-  try {
-    const value = execFileSync('secret-tool', ['lookup', ...browser.secret], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-    if (value) return value
-  } catch (error) {
-    if (error?.code === 'ENOENT') throw new Error(NO_SECRET_TOOL)
+  const keys = []
+  const labels = [browser.secret, ['application', 'chrome'], ['application', 'chromium'], ['application', browser.keychain], ['xdg:schema', 'chrome_libsecret_os_crypt_password_v2']]
+  let tool = true
+  for (const label of labels) {
+    try {
+      const value = execFileSync('secret-tool', ['lookup', ...label], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      if (value) keys.push(value)
+    } catch (error) {
+      if (error?.code === 'ENOENT') tool = false
+    }
   }
-  return 'peanuts'
+  keys.push('peanuts')
+  return { keys, tool }
 }
 
 function decrypt(value, key) {
@@ -183,7 +193,7 @@ function readFromBrowser(name, profile, userDataDir) {
   // A profile can exist without ever having stored cookies; do not shell out for nothing.
   if (!hasSqlite()) throw new Error('sqlite3 not found; install it (e.g. `apt install sqlite3`) or pass --cookie/--ua')
 
-  const key = pbkdf2Sync(passwordFor(browser), 'saltysalt', process.platform === 'darwin' ? 1003 : 1, 16, 'sha1')
+  const { keys, tool } = candidateKeys(browser)
   const copy = path.join(mkdtempSync(path.join(tmpdir(), 'venice-cookie-')), 'Cookies')
   copyFileSync(db, copy)
 
@@ -199,13 +209,18 @@ function readFromBrowser(name, profile, userDataDir) {
     if (row.name !== '__client') continue
     const raw = Buffer.from(row.hex, 'hex')
     const prefix = raw.subarray(0, 3).toString()
-    try {
-      client = decrypt(raw, key)
-    } catch (error) {
-      failure = error
-      // `v11` is keyring-encrypted; `peanuts` can never open it.
-      if (prefix === 'v11' && key === 'peanuts') failure = new Error(NO_SECRET_TOOL)
+    for (const password of keys) {
+      const key = pbkdf2Sync(password, 'saltysalt', process.platform === 'darwin' ? 1003 : 1, 16, 'sha1')
+      try {
+        client = decrypt(raw, key)
+        break
+      } catch (error) {
+        failure = error
+        // `v11` is keyring-encrypted, so `peanuts` alone will never open it.
+        if (prefix === 'v11' && password === 'peanuts') failure = new Error(tool ? NO_KEYRING_ITEM : NO_SECRET_TOOL)
+      }
     }
+    if (client) break
   }
   if (!client) {
     if (failure) throw failure
