@@ -162,6 +162,20 @@ So `grep` is out of the default list and stays available on request:
 delegation off entirely. `webfetch` and a URL `read` remain on by default: both
 become `web_scrape`, whose output the client can use.
 
+## Result of the fifth measurement (`bash` arithmetic -> `calculator`)
+
+Three runs, through the proxy, with `bash` delegated and the model asked for
+`391 * 17 + 44`: 3/3 the model called `bash`, the proxy peeled the wrapper and
+sent `calculator` with `{"expression":"391 * 17 + 44"}`, the server answered
+`Result: 6691`, and the turn closed with the number and no tool call to the
+client. Before the change, 3/3 the same turn went to the client as
+`bash {"command":"echo $((...))"}`.
+
+The conversion is conditional: `bareExpression` peels `echo $((...))`,
+`echo $[...]` and `python3 -c "print(...)"`, and only a command that is pure
+arithmetic afterwards is handed over. `ls -la`, `git status` or `npm test` keep
+going to the client.
+
 ## What is left
 
 - Settle `read` against `webfetch`. Options, cheapest first: drop `read` from the
@@ -170,5 +184,4 @@ turn when a URL is in the message; rename the delegated tool in the prompt to
   proxy to answer a `read` whose `path` starts with `http` by delegating it.
 - Watch a mixed turn: one delegated tool plus one emulated one. `emulatedTools`
   stays true there, so `SERVER_LOOP_STEPS` still bounds the server loop.
-- Decide on `calculator` for a bare-expression `bash`: it needs a check of the
-  command before the turn, which is a heuristic the current table does not have.
+- `calculator` for a bare-expression `bash` is done and measured (fifth measurement). The same conditional check could be widened to `python -c` with arithmetic of floats, which is not covered.

@@ -71,3 +71,4 @@ Medición en vivo con Chrome headless (puerto 9222) y su consola, sin adivinar:
 ## Siguiente
 
 - Hacer una edición real desde OpenCode y mirar el journal por si el modelo devuelve texto sin markdown.
+- **`calculator` para `bash` aritmético: hecho y medido.** `bareExpression` pela `echo $((...))`, `echo $[...]` y `python3 -c "print(...)"`, y solo convierte si queda aritmética pura; `bash` entra en la lista por defecto con esa condición. 3/3 el servidor ejecutó `calculator`, `Result: 6691`, sin tool call al cliente. `ls -la`, `git status` y `npm test` siguen yendo al cliente.
