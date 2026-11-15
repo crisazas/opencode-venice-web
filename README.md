@@ -38,7 +38,7 @@ OpenCode ──HTTP──> 127.0.0.1:3456  ──HTTPS + your session cookie─�
 ### Requirements
 
 - **Node 22 or newer.** `npm` ships with it and is used once, to install `wreq-js`.
-- **A desktop browser already signed in to venice.ai** (Brave, Chrome, Edge or Chromium) on the same machine, so the login step can read the `__client` cookie. On Linux the cookie is decrypted through `secret-tool` (gnome-keyring); without a keyring the well-known `peanuts` password is tried, which only works if the browser itself was started without one.
+- **A desktop browser already signed in to venice.ai** (Brave, Chrome, Edge or Chromium) on the same machine, so the login step can read the `__client` cookie. On Linux the cookie is decrypted through `secret-tool` (gnome-keyring); without a keyring the well-known `peanuts` password is tried, which only works if the browser itself was started without one. The cookie DB is SQLite, so `sqlite3` must be installed; if it is not, or the browser has no profile yet, use manual mode (`--cookie`/`--ua`) instead.
 - **A paid Venice plan.** The web models are free to use but the account must be Pro or above.
 - `curl` is optional: the default transport is `wreq-js`, which is what gets past Cloudflare. Set `VENICE_WEB_TRANSPORT=curl` only if you want the curl path, and then install `curl`.
 - Linux with systemd works (unit `ai.opencode.venice-web`), as does macOS with launchd.
@@ -216,7 +216,7 @@ Two things the route does to stay usable under Venice's limits: the upload retri
 | `node src/proxy.mjs` | run the proxy in the foreground |
 | `node src/login.mjs` | (re)read the browser cookie and store the session |
 | `node src/login.mjs --browser brave` | pick a browser explicitly |
-| `node src/login.mjs --cookie "__client=…" --ua "Mozilla/5.0 …"` | manual mode for unsupported browsers |
+| `node src/login.mjs --cookie "__client=…" --ua "Mozilla/5.0 …"` | manual mode for unsupported browsers, missing `sqlite3`, or an empty browser profile |
 | `node src/sync.mjs` | add/update the OpenCode provider |
 | `node src/sync.mjs --default` | also set `model` and `small_model` |
 | `node src/sync.mjs --remove` | remove the provider again |
@@ -300,6 +300,21 @@ tail -f ~/.config/opencode/venice-web/proxy.log   # see each request and tool ca
 launchctl kickstart -k gui/$(id -u)/ai.opencode.venice-web   # macOS: restart the service
 systemctl --user restart ai.opencode.venice-web               # Linux
 ```
+
+### "could not read browser cookies"
+
+Automatic mode needs three things: a supported browser, a profile it has actually used, and `sqlite3` on the `PATH`. It skips a browser that has no profile instead of failing, and says so per browser. If every line says `no venice.ai cookie`, no browser here has a venice.ai session - sign in first, or use manual mode:
+
+1. Sign in at <https://venice.ai> in your browser and wait for the chat to load.
+2. Open DevTools -> **Application** -> **Cookies** -> `https://clerk.venice.ai`, and copy the value of `__client`.
+3. Copy your real user agent: DevTools -> **Console** -> `navigator.userAgent`.
+4. Run it, keeping the quotes:
+
+```sh
+node src/login.mjs --cookie "__client=PASTE_THE_VALUE" --ua "PASTE_YOUR_USER_AGENT"
+```
+
+The user agent matters: Clerk rejects the cookie when it does not match the browser that got it. Opening the browser once with a normal profile is enough for automatic mode to work next time.
 
 ## Claude Code skill: orchestrate OpenCode workers
 

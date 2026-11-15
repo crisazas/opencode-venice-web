@@ -93,10 +93,22 @@ function browserUserAgent(browser) {
   return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 }
 
+/** True when a `sqlite3` binary is reachable; the cookie DB is SQLite. */
+function hasSqlite() {
+  try {
+    execFileSync('sqlite3', ['-version'], { stdio: ['ignore', 'ignore', 'ignore'] })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function readFromBrowser(name, profile) {
   const browser = BROWSERS[name]
   const db = candidatePaths(browser, profile).find(existsSync)
   if (!db) return null
+  // A profile can exist without ever having stored cookies; do not shell out for nothing.
+  if (!hasSqlite()) throw new Error('sqlite3 not found; install it (e.g. `apt install sqlite3`) or pass --cookie/--ua')
 
   const key = pbkdf2Sync(passwordFor(browser), 'saltysalt', process.platform === 'darwin' ? 1003 : 1, 16, 'sha1')
   const copy = path.join(mkdtempSync(path.join(tmpdir(), 'venice-cookie-')), 'Cookies')
@@ -137,15 +149,17 @@ export function findCookies({ browser, profile } = {}) {
   }
   throw new Error(
     `could not read browser cookies:\n  ${notes.join('\n  ')}\n` +
-      'Sign in to venice.ai in a supported browser, or pass --cookie/--ua manually.',
+      'Sign in to venice.ai in a supported browser, or pass --cookie/--ua manually (see README, troubleshooting).',
   )
 }
 
 /** Parses a Cookie header or JSON export into a raw `__client` value. */
 export function clientFromString(input) {
-  const text = input.replace(/^cookie:\s*/i, '')
+  const text = input.replace(/^cookie:\s*/i, '').trim()
   const match = /(?:^|;\s*)__client=([^;]+)/.exec(text)
   if (match) return match[1]
+  // A bare value (no `=`, no `;`, not JSON) is already the cookie itself.
+  if (text && !text.includes('=') && !/^[[{]/.test(text)) return text
   try {
     const parsed = JSON.parse(text)
     const list = Array.isArray(parsed) ? parsed : parsed?.cookies
