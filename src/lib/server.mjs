@@ -452,13 +452,22 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
   // error. Measured on an image turn that edits: 1 of 3 runs failed this way.
   if (!state.terminal && filesDeHidratacion.length) {
     warn('  ~ hydrated step ended early, resending the turn without it')
-    const resend = mapping.request
     state = yield* collectStream(
-      (await upstreamChat(resend, INFERENCE_PATH, signal)).body,
+      (await upstreamChat(mapping.request, INFERENCE_PATH, signal)).body,
       mapping,
       chunk,
       { stopServerLoop: mapping.emulatedTools },
     )
+    // The model had the bytes a moment ago, so it answers from them here. The
+    // bare request leaves them out and it used to answer "no veo ninguna imagen".
+    message = read(state.text, state)
+    if ((message.content ?? '').trim() && !message.serverCalls?.length) {
+      log('  ~ hydrated step answered after the resend, keeping it')
+      message.serverCallsRan = true
+      message.serverCallsRan = true
+      // the look budget is spent: this reply is the answer, not another step
+      viewRounds = 99
+    }
   }
 
   if (mapping.emulatedTools) {
