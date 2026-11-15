@@ -56,12 +56,13 @@ needs the emulated ones, so the prompt has to say which is which. That is the
 same failure the envelope was built for; it is why this is a per-tool choice and
 not a switch.
 
-Status (2026-11-15): implemented behind `VENICE_WEB_DELEGATE` (`0` turns it off),
-currently only `webfetch` -> `web_scrape` and `grep` -> `context_grep`
-(`DELEGATED_TOOLS` in `emulate.mjs`). `toVeniceRequest({ delegate })` moves those
-names out of the prompt and into `tools[]` as server types; three tests pin it.
-**Not yet measured on a live turn** - that is what decides whether the model uses
-the delegated tool or falls back to the envelope.
+Status (2026-11-15): implemented behind `VENICE_WEB_DELEGATE` (`0` turns it off).
+`webfetch` -> `web_scrape` and a URL `read` -> `web_scrape` are measured and on by
+default. `grep` -> `context_grep` is measured too, and measured to be the wrong
+default: `context_grep` searches the conversation, not the file tree (see the
+fourth measurement), so a repository search finds nothing. `toVeniceRequest({
+ delegate })` moves a delegated name out of the prompt and into `tools[]` as a
+server type; tests pin the mapping.
 
 ## Option B - stop having tools the server cannot run
 
@@ -137,6 +138,24 @@ the argument, so a `read` of `/tmp/a.txt` stays with the client.
 
 That settles the ambiguity without asking the model: the call is recognised
 whatever name it used.
+
+## Result of the fourth measurement (`grep`, conversation vs file tree)
+
+Two turns, three runs each, through the proxy, with `grep` delegated:
+
+| what the pattern lives in | result |
+| --- | --- |
+| the conversation (`mandarina`) | 3/3 the server ran `context_grep`, `total_matches: 4`, the answer listed the messages, no tool call reached the client |
+| the file tree (`IMAGE_SIZES` in `src/lib/image.mjs`) | 3/3 the server ran `context_grep`, found only the prompt itself, and the model answered that the code is not in the context and asked for the files |
+
+So `context_grep` does exactly what its name says: it searches the
+*conversation*, and it is blind to the file tree. In OpenCode the usual `grep` is
+a search over the repository, so delegating `grep` silently changes what the tool
+means - and the model does not notice, because it gets a well-formed answer with
+`total_matches: 1` instead of an error.
+
+That makes `grep` the wrong default. It fits only when the client's own `grep`
+already means "search this conversation", which for OpenCode it does not.
 
 ## What is left
 
