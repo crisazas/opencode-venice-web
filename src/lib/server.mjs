@@ -445,6 +445,20 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
   if (hydration) {
     log(`  ~ hydrated image ${JSON.stringify(hydration.media_ids ?? [])}${state.text ? '' : ' (no answer)'}`)
   }
+  // The hydration request ended before `response.completed` on a 500
+  // (`Failed to parse hydration arguments`): the turn was never answered, so it
+  // is resent once without the hydration step instead of surfacing a stream
+  // error. Measured on an image turn that edits: 1 of 3 runs failed this way.
+  if (!state.terminal && filesDeHidratacion.length) {
+    warn('  ~ hydrated step ended early, resending the turn without it')
+    const resend = mapping.request
+    state = yield* collectStream(
+      (await upstreamChat(resend, INFERENCE_PATH, signal)).body,
+      mapping,
+      chunk,
+      { stopServerLoop: mapping.emulatedTools },
+    )
+  }
 
   if (mapping.emulatedTools) {
     log(`  ~ depuracion: emulatedTools=${mapping.emulatedTools} hydration=${hydration ? 'si' : 'no'} texto=${JSON.stringify((state.text || '').slice(0, 80))}`)
