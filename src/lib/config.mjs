@@ -73,8 +73,25 @@ export const judgeTimeoutMs = Number(process.env.VENICE_WEB_JUDGE_TIMEOUT ?? 45_
 
 /**
  * Tools that are handed to Venice as its own server tools instead of being
- * emulated (docs/ADAPTING.md). Only the names with a measured server
- * counterpart belong here: `webfetch` -> `web_scrape`, `grep` -> `context_grep`.
- * `VENICE_WEB_DELEGATE=0` turns it off.
+ * emulated (docs/ADAPTING.md). Only names whose counterpart returns what the
+ * client can use belong here: `webfetch` -> `web_scrape`, and a `read` whose
+ * path is a URL -> `web_scrape`.
+ *
+ * `grep` is NOT on by default. Its counterpart `context_grep` searches the
+ * conversation, not the file tree, so a repository search finds nothing and the
+ * model reports the code as missing instead of falling back. Measured in
+ * docs/ADAPTING.md (fourth measurement).
+ *
+ * `VENICE_WEB_DELEGATE` overrides the list, comma separated; `0` (or `none`)
+ * turns delegation off. `grep` can be asked for explicitly.
  */
-export const delegateTools = process.env.VENICE_WEB_DELEGATE === '0' ? [] : ['webfetch', 'grep', 'read']
+const DELEGATE_DEFAULT = ['webfetch', 'read']
+
+function delegateList(raw) {
+  if (raw === undefined || raw === '') return DELEGATE_DEFAULT
+  const names = raw.split(',').map((name) => name.trim()).filter(Boolean)
+  if (!names.length || names.includes('0') || names.includes('none')) return []
+  return names
+}
+
+export const delegateTools = delegateList(process.env.VENICE_WEB_DELEGATE)

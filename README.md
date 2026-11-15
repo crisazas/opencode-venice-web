@@ -27,7 +27,7 @@ OpenCode ──HTTP──> 127.0.0.1:3456  ──HTTPS + your session cookie─�
 
 - No API key, no credits, no password stored: only the browser's long-lived Clerk `__client` cookie.
 - 20 free web models (DeepSeek, Qwen, GLM, Kimi, Gemma, Aion, TEE-hosted variants).
-- Tool calling works: OpenCode's `read`/`write`/`edit`/`shell`/`glob`/`grep` tools are emulated through a JSON envelope (see [docs/PROTOCOL.md](docs/PROTOCOL.md)).
+- Tool calling works: OpenCode's `read`/`write`/`edit`/`shell`/`glob`/`grep` tools are emulated through a JSON envelope (see [docs/PROTOCOL.md](docs/PROTOCOL.md)). `webfetch` and a `read` of a URL are not emulated at all: they go to Venice's own `web_scrape` (see [docs/ADAPTING.md](docs/ADAPTING.md)).
 - Images work all ways: photos and screenshots are uploaded to the web media endpoint and handed back to the model, exactly like the web client does, `POST /v1/images/generations` makes new ones on the free image models, and `POST /v1/images/edits` changes an existing one on the free edit models.
 - Runs on macOS and Linux. Node 22+ and the system `curl` (preinstalled on macOS and most Linux distributions); `wreq-js` is the only npm dependency.
 
@@ -246,7 +246,9 @@ All environment variables are optional; the defaults are what the installer uses
 | `VENICE_WEB_JUDGE` | on | `0` turns off the judge that checks whether a turn may end |
 | `VENICE_WEB_JUDGE_MODEL` | `qwen3-5-35b-a3b` | model for the judge (empty: the request's own model) |
 | `VENICE_WEB_JUDGE_TIMEOUT` | `45000` | judge timeout (ms); a late judge keeps the reply |
-| `VENICE_WEB_MIDDLEFACE` | `0.1.1128` | `x-venice-middleface-version` header |
+| `VENICE_WEB_DELEGATE` | `webfetch,read` | client tools handed to Venice as its own server tools; comma separated, `0`/`none` disables |
+| `VENICE_WEB_DEBUG_MAX_BYTES` | `5242880` | size at which `debug.log` is rotated to `debug.log.1` |
+| `VENICE_WEB_MIDDLEFACE` | `0.1.1249` | `x-venice-middleface-version` header |
 | `VENICE_WEB_CLERK_VERSION` | pinned | Clerk frontend API version query |
 | `OPENCODE_CONFIG` | `~/.config/opencode/opencode.json` | config file `sync.mjs` patches |
 

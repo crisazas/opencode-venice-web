@@ -157,6 +157,11 @@ means - and the model does not notice, because it gets a well-formed answer with
 That makes `grep` the wrong default. It fits only when the client's own `grep`
 already means "search this conversation", which for OpenCode it does not.
 
+So `grep` is out of the default list and stays available on request:
+`VENICE_WEB_DELEGATE=grep` (or `webfetch,grep,read`) puts it back, `0` turns
+delegation off entirely. `webfetch` and a URL `read` remain on by default: both
+become `web_scrape`, whose output the client can use.
+
 ## What is left
 
 - Settle `read` against `webfetch`. Options, cheapest first: drop `read` from the
