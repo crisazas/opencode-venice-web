@@ -260,6 +260,7 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
     const last = [...(body.messages ?? [])].reverse().find((item) => item.role !== 'system' && item.role !== 'developer')
     let judged = 0
     let formatRetries = 0
+    let noToolRetries = 0
 
     // Up to two extra attempts while the reply is unhelpful. Every trigger is
     // structural (see shouldRetry); a reply that ends the turn right after a tool
@@ -277,6 +278,10 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
         decision = judgeDecision(verdict?.verdict)
       }
       if (!decision.retry) break
+      // A well-formed envelope with a real answer still gets one retry, in case
+      // the model described a tool it never called. The second one never improved
+      // anything and cost a full extra request per turn.
+      if (decision.reason === 'envelope without tool calls' && noToolRetries++ >= 1) break
       if (!decision.reason.startsWith('judge:') && formatRetries++ >= 2) break
 
       log(`  ~ ${decision.reason}, retrying...`)
@@ -304,6 +309,9 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
 
     // Never forward a blank assistant turn: it is invisible in the client.
     applyFallback(message, state.text)
+    // The envelope is scaffolding. A failed parse or prose before the JSON leaves
+    // it in the visible text, where it enters the history and gets imitated.
+    message.content = stripEnvelope(message.content ?? '')
   }
 
   if (!state.terminal) throw new Error('the Venice stream ended before response.completed')
@@ -332,6 +340,41 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
   yield chunk({}, finish, {
     usage: { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion },
   })
+}
+
+function looksLikeEnvelope(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if ('tool_calls' in value) return true
+  return 'status' in value && 'content' in value
+}
+
+// Only the tail is inspected: leaked envelopes always come last, and a JSON the
+// assistant is deliberately showing mid-answer stays untouched.
+function stripEnvelope(text) {
+  if (!text) return text
+  const trimmed = text.trimEnd()
+
+  const fenced = trimmed.match(/```[a-zA-Z]*\s*\n([\s\S]*?)```$/)
+  if (fenced) {
+    try {
+      if (looksLikeEnvelope(JSON.parse(fenced[1].trim()))) {
+        const kept = trimmed.slice(0, fenced.index).trim()
+        if (kept) return kept
+      }
+    } catch {}
+  }
+
+  const bare = trimmed.match(/(?:^|\n)(\{[\s\S]*\})$/)
+  if (bare) {
+    try {
+      if (looksLikeEnvelope(JSON.parse(bare[1].trim()))) {
+        const kept = trimmed.slice(0, bare.index).trim()
+        if (kept) return kept
+      }
+    } catch {}
+  }
+
+  return trimmed
 }
 
 async function handleChat(req, res) {
