@@ -155,16 +155,16 @@ function candidateKeys(browser) {
  * Keys held by KWallet, which is where KDE sessions keep the browser secret.
  *
  * Both the CLI and the D-Bus API are tried: `kwallet-query` answers "folder X
- * does not exist" for existing folders on some builds, and the wallet holding
- * the secret is usually the one named after the browser (`Chrome Keys`) with
- * the entry `Chrome`. Every value that comes back is pushed and the caller
- * keeps whichever one decrypts, so a wrong name only costs a failed attempt.
+ * does not exist" for existing folders on some builds. The layout seen in the
+ * wild is wallet `kdewallet`, folder `<Browser> Keys`, entry `<Browser> Safe
+ * Storage`. Every value that comes back is pushed and the caller keeps
+ * whichever one decrypts, so a wrong name only costs a failed attempt.
  */
 function kwalletKeys(browser) {
   const keys = []
-  const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome', 'Chromium']
+  const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome Safe Storage', 'Chromium Safe Storage']
   const wallets = ['kdewallet', `${browser.label} Keys`, `${browser.label} Safe Storage`]
-  const folders = ['', 'Passwords', 'chrome', 'Chrome', 'Keys']
+  const folders = [`${browser.label} Keys`, 'Chrome Keys', 'Keys', '', 'Passwords', 'chrome', 'Chrome']
 
   // `kwallet-query` mixes its i18n and "folder does not exist" notices into the
   // output, so only a line that is not a notice counts as the value.
@@ -219,7 +219,7 @@ function kwalletDbusKeys(browser, wallets, entries) {
   for (const wallet of wallets) {
     const handle = call('open', wallet, '0', 'venice-web')
     if (!handle || handle === '-1') continue
-    const folders = [browser.label, 'Keys', 'Passwords', '']
+    const folders = [`${browser.label} Keys`, 'Chrome Keys', 'Keys', '', 'Passwords', browser.label]
     for (const folder of folders) {
       for (const entry of entries) {
         const value = call('readPassword', handle, folder, entry, 'venice-web')
