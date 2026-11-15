@@ -26,6 +26,9 @@ export const BROWSERS = {
 
 const COOKIE_HOSTS = ['.clerk.venice.ai', 'clerk.venice.ai', '.venice.ai', 'venice.ai']
 
+const NO_SECRET_TOOL =
+  'secret-tool is missing, so the keyring key cannot be read (install libsecret-tools), or pass --cookie/--ua'
+
 const profiles = (name) => (name ? [name] : ['Default', 'Profile 1', 'Profile 2', 'Profile 3'])
 
 /**
@@ -112,16 +115,22 @@ export function candidatePaths(browser, profile, userDataDir) {
   return out
 }
 
+/**
+ * The OS key the browser used for its cookie DB.
+ *
+ * On Linux this is `secret-tool lookup` against the keyring. `v11` rows are
+ * always keyring-encrypted, so when `secret-tool` is missing we say so instead
+ * of returning `peanuts` and failing with an opaque bad-decrypt.
+ */
 function passwordFor(browser) {
   if (process.platform === 'darwin') {
     return execFileSync('security', ['find-generic-password', '-s', browser.keychain, '-w'], { encoding: 'utf8' }).trim()
   }
-  // Linux: secret-tool lookup, fall back to the no-keyring default.
   try {
     const value = execFileSync('secret-tool', ['lookup', ...browser.secret], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     if (value) return value
-  } catch {
-    /* fall through */
+  } catch (error) {
+    if (error?.code === 'ENOENT') throw new Error(NO_SECRET_TOOL)
   }
   return 'peanuts'
 }
@@ -185,15 +194,23 @@ function readFromBrowser(name, profile, userDataDir) {
   )
   const parsed = rows.trim() ? JSON.parse(rows) : []
   let client = null
+  let failure = null
   for (const row of parsed) {
     if (row.name !== '__client') continue
+    const raw = Buffer.from(row.hex, 'hex')
+    const prefix = raw.subarray(0, 3).toString()
     try {
-      client = decrypt(Buffer.from(row.hex, 'hex'), key)
-    } catch {
-      /* try the next profile */
+      client = decrypt(raw, key)
+    } catch (error) {
+      failure = error
+      // `v11` is keyring-encrypted; `peanuts` can never open it.
+      if (prefix === 'v11' && key === 'peanuts') failure = new Error(NO_SECRET_TOOL)
     }
   }
-  if (!client) return null
+  if (!client) {
+    if (failure) throw failure
+    return null
+  }
   return { client, userAgent: browserUserAgent(browser), source: browser.label }
 }
 

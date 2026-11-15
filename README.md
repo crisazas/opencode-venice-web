@@ -38,7 +38,7 @@ OpenCode ──HTTP──> 127.0.0.1:3456  ──HTTPS + your session cookie─�
 ### Requirements
 
 - **Node 22 or newer.** `npm` ships with it and is used once, to install `wreq-js`.
-- **A desktop browser already signed in to venice.ai** (Brave, Chrome, Edge or Chromium) on the same machine, so the login step can read the `__client` cookie. On Linux the cookie is decrypted through `secret-tool` (gnome-keyring); without a keyring the well-known `peanuts` password is tried, which only works if the browser itself was started without one. The cookie DB is SQLite, so `sqlite3` must be installed; if it is not, or the browser has no profile yet, use manual mode (`--cookie`/`--ua`) instead.
+- **A desktop browser already signed in to venice.ai** (Brave, Chrome, Edge or Chromium) on the same machine, so the login step can read the `__client` cookie. On Linux the cookie is decrypted with the key from the keyring, read via `secret-tool` (`libsecret-tools`, present on most desktops); without a keyring the well-known `peanuts` password is tried, which only works if the browser itself was started without one. A `v11` cookie is always keyring-encrypted, so if `secret-tool` is missing the login says so instead of failing opaquely - install `libsecret-tools` or use manual mode. The cookie DB is SQLite, so `sqlite3` must be installed too.
 - **A paid Venice plan.** The web models are free to use but the account must be Pro or above.
 - `curl` is optional: the default transport is `wreq-js`, which is what gets past Cloudflare. Set `VENICE_WEB_TRANSPORT=curl` only if you want the curl path, and then install `curl`.
 - Linux with systemd works (unit `ai.opencode.venice-web`), as does macOS with launchd.
@@ -310,6 +310,12 @@ Chrome running headless or with a custom `--user-data-dir` (containers, remote b
 
 ```sh
 node src/login.mjs --user-data-dir /tmp/opencode/chrome-perfil
+```
+
+A `v11` cookie (Chrome 130+ on a desktop with a keyring) can only be opened with the keyring key. If the login says `secret-tool is missing`, install it and retry:
+
+```sh
+sudo apt install libsecret-tools   # or your distro's package for secret-tool
 ```
 
 Manual mode, when there is no browser on the machine at all:

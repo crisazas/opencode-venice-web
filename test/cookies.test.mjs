@@ -1,9 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { BROWSERS, findCookies, clientFromString } from '../src/lib/cookies.mjs'
+
+const hasSecretTool = () => {
+  try {
+    execFileSync('secret-tool', ['--help'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
 
 /** Runs `fn` with HOME and TMPDIR pointed at an empty dir, so stray real profiles do not leak in. */
 function sandboxed(fn) {
@@ -65,6 +75,21 @@ test('a profile dir outside ~/.config is found by name', () => {
     const dir = path.join(home, 'chrome-perfil')
     mkdirSync(path.join(dir, 'Default'), { recursive: true })
     writeFileSync(path.join(dir, 'Default', 'Cookies'), 'not a database')
+    assert.throws(() => findCookies({ browser: 'chrome' }), (error) => !/no venice.ai cookie/.test(error.message))
+  })
+})
+
+test('a v11 cookie without secret-tool says so instead of "no cookie"', () => {
+  sandboxed((home) => {
+    // v11 rows are keyring-encrypted; without secret-tool `peanuts` cannot open them.
+    const dir = path.join(home, '.config', 'google-chrome', 'Default')
+    mkdirSync(dir, { recursive: true })
+    const db = path.join(dir, 'Cookies')
+    execFileSync('sqlite3', [db, 'create table cookies (host_key text, name text, encrypted_value blob);'])
+    const payload = Buffer.concat([Buffer.from('v11'), Buffer.alloc(64, 7)])
+    execFileSync('sqlite3', [db, `insert into cookies values ('.clerk.venice.ai', '__client', x'${payload.toString('hex')}');`])
+    if (hasSecretTool()) return // a real keyring would decrypt it, so only assert the no-tool path
+    assert.throws(() => findCookies({ browser: 'chrome' }), /secret-tool is missing/)
     assert.throws(() => findCookies({ browser: 'chrome' }), (error) => !/no venice.ai cookie/.test(error.message))
   })
 })
