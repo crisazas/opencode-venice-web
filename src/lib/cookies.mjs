@@ -29,6 +29,9 @@ const COOKIE_HOSTS = ['.clerk.venice.ai', 'clerk.venice.ai', '.venice.ai', 'veni
 const NO_SECRET_TOOL =
   'secret-tool is missing, so the keyring key cannot be read (install libsecret-tools), or pass --cookie/--ua'
 
+// A wallet that wants unlocking can hold a call open forever; give up instead.
+const WALLET_TIMEOUT = 4000
+
 const NO_KEYRING_ITEM =
   'the cookie is keyring-encrypted but no keyring key was found (unlock the keyring in your desktop session; on KDE also try `kwallet-query -l kdewallet`), or pass --cookie/--ua'
 
@@ -181,7 +184,9 @@ function kwalletKeys(browser) {
           ...(folder ? [['-r', entry, wallet, ...folderArgs], [...folderArgs, '-r', entry, wallet]] : []),
         ]) {
           try {
-            const value = valueOf(execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
+            const value = valueOf(
+              execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: WALLET_TIMEOUT }),
+            )
             if (value) keys.push(value)
           } catch {
             /* keep trying */
@@ -205,6 +210,7 @@ function kwalletDbusKeys(browser, wallets, entries) {
       return execFileSync('qdbus', [svc, obj, `${iface}.${args[0]}`, ...args.slice(1)], {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: WALLET_TIMEOUT,
       }).trim()
     } catch {
       return ''
