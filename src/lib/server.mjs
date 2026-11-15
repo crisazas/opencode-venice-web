@@ -11,7 +11,7 @@
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
-import { apiBase, debug, delegateTools, dumpFile, host, judgeEnabled, judgeModel, judgeTimeoutMs, port, providerID } from './config.mjs'
+import { apiBase, debug, delegateTools, dumpFile, host, imageModel, judgeEnabled, judgeModel, judgeTimeoutMs, port, providerID } from './config.mjs'
 import {
   SERVER_TOOL_DEFS,
   applyFallback,
@@ -714,7 +714,19 @@ async function* openaiChunks(body, mapping, upstreamBody, signal) {
         const viewResponse = await upstreamChat(next, INFERENCE_PATH, signal, ficherosDeTurno)
         if (!viewResponse.ok) break
         state = yield* collectStream(viewResponse.body, mapping, chunk, { stopServerLoop: true })
-        message = read(state.text, state)
+        const lookedAgain = read(state.text, state)
+        // The answer to a lookup that only asked to look again *is* the answer: it
+        // comes from a request that carried the bytes, and the generic retry path
+        // resends without them, where the model then guesses from the text
+        // ("an alleyway", "a human eye" for a picture of a fish). Measured on an
+        // image turn, 2026-08-15: two of three runs were replaced that way.
+        const lookedAgainOnly = soloPideMirar(state.text) || Boolean(lookedAgain.serverCalls?.length && !(lookedAgain.content ?? '').trim())
+        message = lookedAgain
+        if (lookedAgainOnly && (message.content ?? '').trim() && !message.serverCalls?.length) {
+          message.serverCallsRan = true
+          log('  ~ answered after looking again, keeping it')
+          break
+        }
         // Even with no tools the model sometimes emits the call anyway; at the
         // bound it must not be answered again. The pending client calls are kept.
         // An `edit_image` is the exception: the bound is about lookups, and the
@@ -1251,7 +1263,15 @@ async function handleChat(req, res) {
   // later turn counted as an image turn, its own tools were stripped (leaving
   // only `view_media`/`edit_image`) and the model looped on lookups until the
   // turn closed as `(empty reply)`.
-  const mapping = toVeniceRequest(body, { skipServer: carriesImage(body), delegate: delegateTools })
+  // An image turn is sent to the image model whatever the client asked for: the
+  // picture has to be read for the turn to mean anything, and the model picked
+  // for code is not always a vision one (see models.mjs `IMAGE_MODEL`).
+  const imageTurn = carriesImage(body)
+  if (imageTurn && imageModel && body.model !== imageModel) {
+    log(`   ~ image turn: ${body.model} -> ${imageModel}`)
+    body.model = imageModel
+  }
+  const mapping = toVeniceRequest(body, { skipServer: imageTurn, delegate: delegateTools })
 
   // Venice only resolves an image by its own `media_id`, so every inline data
   // URL is uploaded first and the placeholder is replaced with the returned id.
