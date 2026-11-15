@@ -12,7 +12,7 @@
  * `--cookie` + `--ua`.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdtempSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
@@ -26,20 +26,105 @@ export const BROWSERS = {
 
 const COOKIE_HOSTS = ['.clerk.venice.ai', 'clerk.venice.ai', '.venice.ai', 'venice.ai']
 
+const NO_SECRET_TOOL =
+  'secret-tool is missing, so the keyring key cannot be read (install libsecret-tools), or pass --cookie/--ua'
+
+// A wallet that wants unlocking can hold a call open forever; give up instead.
+const WALLET_TIMEOUT = 4000
+
+const NO_KEYRING_ITEM =
+  'the cookie is keyring-encrypted but no keyring key was found (unlock the keyring in your desktop session; on KDE also try `kwallet-query -l kdewallet`), or pass --cookie/--ua'
+
 const profiles = (name) => (name ? [name] : ['Default', 'Profile 1', 'Profile 2', 'Profile 3'])
 
-function candidatePaths(browser, profile) {
+/** True when a stray dir name looks like this browser, e.g. `chrome-perfil`. */
+function familyMatch(named, browser) {
+  const alias = browser.linux.split('/').pop().toLowerCase().replace(/-stable$/, '').replace(/^google-/, '').replace(/-browser$/, '')
+  return named.includes(alias)
+}
+
+/**
+ * True when the profile DB was encrypted by this browser family. Every Chromium
+ * build writes `v10`/`v11` there, and the family is settled by whether the
+ * cookie actually decrypts, so a loose match is fine.
+ */
+function sameProduct(dir, browser) {
+  try {
+    const db = path.join(dir, 'Default', 'Cookies')
+    if (!existsSync(db)) return false
+    const hex = execFileSync(
+      'sqlite3',
+      [db, "select hex(encrypted_value) from cookies where name='__client' limit 1;"],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+    if (!hex) return false
+    return /^(763130|763131)/.test(hex) // "v10" / "v11"
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Profile dirs that sit outside the usual `~/.config/<browser>`: a Chrome
+ * launched headless or with `--user-data-dir` keeps its profile elsewhere
+ * (often under the temp dir), and those still hold a usable cookie.
+ */
+export function strayProfileDirs(browser) {
+  const dirs = []
+  // Only dirs that belong to this browser: a matching name, or a directory that
+  // literally is another browser's own config dir (those are covered for that
+  // browser already, so they are skipped here to keep the label honest).
+  const wanted = browser.linux.split('/').pop().toLowerCase().replace(/-stable$/, '')
+  // Loose alias so a temp `chrome-perfil` matches Chrome without matching every family.
+  const alias = wanted.replace(/^google-/, '').replace(/-browser$/, '')
+  const others = Object.values(BROWSERS)
+    .map((other) => other.linux.split('/').pop().toLowerCase())
+    .filter((name) => name !== wanted)
+  const roots = [path.join(homedir(), '.config'), tmpdir(), path.join(tmpdir(), 'opencode')]
+  const isProfile = (dir) =>
+    existsSync(path.join(dir, 'Default', 'Cookies')) || existsSync(path.join(dir, 'Local State'))
+  for (const root of roots) {
+    let entries = []
+    try {
+      entries = readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const dir = path.join(root, entry.name)
+      if (!isProfile(dir)) continue
+      const named = entry.name.toLowerCase()
+      // `~/.config/<exact browser dir>` is already covered by the caller; only
+      // keep same-family strays here (e.g. `google-chrome-headless`, a temp
+      // `chrome-perfil`, or a Brave profile under /tmp/opencode).
+      if (others.includes(named)) continue
+      // A dir named after the browser is enough; otherwise it must at least
+      // carry the browser name, so a Chrome temp profile is not also Brave's.
+      if (named.includes(alias) || (sameProduct(dir, browser) && familyMatch(named, browser))) dirs.push(dir)
+    }
+  }
+  return dirs
+}
+
+/**
+ * Profile roots a browser may use, in the order they are tried. `userDataDir`
+ * (from `--user-data-dir`) wins outright: headless and portable Chrome installs
+ * keep the cookie DB somewhere else entirely, and guessing around it is useless.
+ */
+export function candidatePaths(browser, profile, userDataDir) {
   const home = homedir()
+  const base = userDataDir ? [path.resolve(userDataDir.replace(/^~(?=$|\/)/, home))] : null
   if (process.platform === 'darwin') {
     const root = path.join(home, 'Library', 'Application Support', browser.mac)
-    return profiles(profile).map((dir) => path.join(root, dir, 'Cookies'))
+    const dirs = base ?? [root]
+    return dirs.flatMap((dir) => profiles(profile).map((name) => path.join(dir, name, 'Cookies')))
   }
-  const roots = [path.join(home, '.config'), path.join(home, '.var', 'app')]
-  const dirs = []
-  for (const root of roots) {
-    if (browser.linux.includes('/')) dirs.push(path.join(root, browser.linux))
-    else dirs.push(path.join(root, browser.linux))
-  }
+  // `userDataDir` is already the profile root; without it, the browser dir sits under ~/.config.
+  const dirs = base ?? [path.join(home, '.config', browser.linux), path.join(home, '.var', 'app', browser.linux)]
+  // Chrome started headless (`--headless=new`) keeps a separate profile dir, and
+  // a custom `--user-data-dir` may be anywhere (temp dir, /tmp/opencode, ...).
+  if (!base) dirs.push(path.join(home, '.config', `${browser.linux}-headless`), ...strayProfileDirs(browser))
   const out = []
   for (const dir of dirs) for (const prof of profiles(profile === 'Default' ? undefined : profile)) {
     out.push(path.join(dir, prof, 'Cookies'))
@@ -48,18 +133,114 @@ function candidatePaths(browser, profile) {
   return out
 }
 
-function passwordFor(browser) {
+/**
+ * Every key worth trying for a cookie DB, in order: the macOS Keychain, the
+ * Linux keyring under each plausible label, KWallet on KDE, then the
+ * no-keyring default.
+ *
+ * Labels differ per desktop and browser build, KDE keeps the key in kwalletd
+ * rather than in gnome-keyring, and a closed wallet makes every lookup return
+ * nothing at all, so all of them are attempted and the caller keeps whichever
+ * one actually decrypts.
+ */
+function candidateKeys(browser) {
   if (process.platform === 'darwin') {
-    return execFileSync('security', ['find-generic-password', '-s', browser.keychain, '-w'], { encoding: 'utf8' }).trim()
+    return [execFileSync('security', ['find-generic-password', '-s', browser.keychain, '-w'], { encoding: 'utf8' }).trim()]
   }
-  // Linux: secret-tool lookup, fall back to the no-keyring default.
-  try {
-    const value = execFileSync('secret-tool', ['lookup', ...browser.secret], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-    if (value) return value
-  } catch {
-    /* fall through */
+  const keys = []
+  const labels = [browser.secret, ['application', 'chrome'], ['application', 'chromium'], ['application', browser.keychain], ['xdg:schema', 'chrome_libsecret_os_crypt_password_v2']]
+  let tool = true
+  for (const label of labels) {
+    try {
+      const value = execFileSync('secret-tool', ['lookup', ...label], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      if (value) keys.push(value)
+    } catch (error) {
+      if (error?.code === 'ENOENT') tool = false
+    }
   }
-  return 'peanuts'
+  keys.push(...kwalletKeys(browser))
+  keys.push('peanuts')
+  return { keys, tool }
+}
+
+/**
+ * Keys held by KWallet, which is where KDE sessions keep the browser secret.
+ *
+ * Both the CLI and the D-Bus API are tried: `kwallet-query` answers "folder X
+ * does not exist" for existing folders on some builds. The layout seen in the
+ * wild is wallet `kdewallet`, folder `<Browser> Keys`, entry `<Browser> Safe
+ * Storage`. Every value that comes back is pushed and the caller keeps
+ * whichever one decrypts, so a wrong name only costs a failed attempt.
+ */
+function kwalletKeys(browser) {
+  const keys = []
+  const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome Safe Storage', 'Chromium Safe Storage']
+  const wallets = ['kdewallet', `${browser.label} Keys`, `${browser.label} Safe Storage`]
+  const folders = [`${browser.label} Keys`, 'Chrome Keys', 'Keys', '', 'Passwords', 'chrome', 'Chrome']
+
+  // `kwallet-query` mixes its i18n and "folder does not exist" notices into the
+  // output, so only a line that is not a notice counts as the value.
+  const valueOf = (output) =>
+    (output ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !/^kf\.i18n:|does not exist|not found|^The folder|^Failed to read/i.test(line))
+      .pop() ?? ''
+
+  for (const wallet of wallets) {
+    for (const folder of folders) {
+      const folderArgs = folder ? ['-f', folder] : []
+      for (const entry of entries) {
+        for (const args of [
+          ['-r', entry, ...folderArgs, wallet],
+          ...(folder ? [['-r', entry, wallet, ...folderArgs], [...folderArgs, '-r', entry, wallet]] : []),
+        ]) {
+          try {
+            const value = valueOf(
+              execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: WALLET_TIMEOUT }),
+            )
+            if (value) keys.push(value)
+          } catch {
+            /* keep trying */
+          }
+        }
+      }
+    }
+  }
+  keys.push(...kwalletDbusKeys(browser, wallets, entries))
+  return keys
+}
+
+/** Same idea over D-Bus, for builds where the CLI cannot reach the wallet. */
+function kwalletDbusKeys(browser, wallets, entries) {
+  const keys = []
+  const svc = 'org.kde.kwalletd5'
+  const obj = '/modules/kwalletd5'
+  const iface = 'org.kde.KWallet'
+  const call = (...args) => {
+    try {
+      return execFileSync('qdbus', [svc, obj, `${iface}.${args[0]}`, ...args.slice(1)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: WALLET_TIMEOUT,
+      }).trim()
+    } catch {
+      return ''
+    }
+  }
+  for (const wallet of wallets) {
+    const handle = call('open', wallet, '0', 'venice-web')
+    if (!handle || handle === '-1') continue
+    const folders = [`${browser.label} Keys`, 'Chrome Keys', 'Keys', '', 'Passwords', browser.label]
+    for (const folder of folders) {
+      for (const entry of entries) {
+        const value = call('readPassword', handle, folder, entry, 'venice-web')
+        if (value && !/^The folder|does not exist|not found|^Invalid/i.test(value)) keys.push(value)
+      }
+    }
+    call('close', handle, 'false', 'venice-web')
+  }
+  return keys
 }
 
 function decrypt(value, key) {
@@ -93,12 +274,24 @@ function browserUserAgent(browser) {
   return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 }
 
-function readFromBrowser(name, profile) {
-  const browser = BROWSERS[name]
-  const db = candidatePaths(browser, profile).find(existsSync)
-  if (!db) return null
+/** True when a `sqlite3` binary is reachable; the cookie DB is SQLite. */
+function hasSqlite() {
+  try {
+    execFileSync('sqlite3', ['-version'], { stdio: ['ignore', 'ignore', 'ignore'] })
+    return true
+  } catch {
+    return false
+  }
+}
 
-  const key = pbkdf2Sync(passwordFor(browser), 'saltysalt', process.platform === 'darwin' ? 1003 : 1, 16, 'sha1')
+function readFromBrowser(name, profile, userDataDir) {
+  const browser = BROWSERS[name]
+  const db = candidatePaths(browser, profile, userDataDir).find(existsSync)
+  if (!db) return null
+  // A profile can exist without ever having stored cookies; do not shell out for nothing.
+  if (!hasSqlite()) throw new Error('sqlite3 not found; install it (e.g. `apt install sqlite3`) or pass --cookie/--ua')
+
+  const { keys, tool } = candidateKeys(browser)
   const copy = path.join(mkdtempSync(path.join(tmpdir(), 'venice-cookie-')), 'Cookies')
   copyFileSync(db, copy)
 
@@ -109,26 +302,39 @@ function readFromBrowser(name, profile) {
   )
   const parsed = rows.trim() ? JSON.parse(rows) : []
   let client = null
+  let failure = null
   for (const row of parsed) {
     if (row.name !== '__client') continue
-    try {
-      client = decrypt(Buffer.from(row.hex, 'hex'), key)
-    } catch {
-      /* try the next profile */
+    const raw = Buffer.from(row.hex, 'hex')
+    const prefix = raw.subarray(0, 3).toString()
+    for (const password of keys) {
+      const key = pbkdf2Sync(password, 'saltysalt', process.platform === 'darwin' ? 1003 : 1, 16, 'sha1')
+      try {
+        client = decrypt(raw, key)
+        break
+      } catch (error) {
+        failure = error
+        // `v11` is keyring-encrypted, so `peanuts` alone will never open it.
+        if (prefix === 'v11' && password === 'peanuts') failure = new Error(tool ? NO_KEYRING_ITEM : NO_SECRET_TOOL)
+      }
     }
+    if (client) break
   }
-  if (!client) return null
+  if (!client) {
+    if (failure) throw failure
+    return null
+  }
   return { client, userAgent: browserUserAgent(browser), source: browser.label }
 }
 
 /** Tries the requested browsers (or all of them) in order. */
-export function findCookies({ browser, profile } = {}) {
+export function findCookies({ browser, profile, userDataDir } = {}) {
   const order = browser ? [browser] : ['brave', 'chrome', 'edge', 'chromium']
   const notes = []
   for (const name of order) {
     if (!BROWSERS[name]) throw new Error(`unknown browser: ${name} (expected ${Object.keys(BROWSERS).join(', ')})`)
     try {
-      const found = readFromBrowser(name, profile)
+      const found = readFromBrowser(name, profile, userDataDir)
       if (found) return found
       notes.push(`${BROWSERS[name].label}: no venice.ai cookie`)
     } catch (error) {
@@ -137,15 +343,17 @@ export function findCookies({ browser, profile } = {}) {
   }
   throw new Error(
     `could not read browser cookies:\n  ${notes.join('\n  ')}\n` +
-      'Sign in to venice.ai in a supported browser, or pass --cookie/--ua manually.',
+      'Sign in to venice.ai in a supported browser, or pass --cookie/--ua manually (see README, troubleshooting).',
   )
 }
 
 /** Parses a Cookie header or JSON export into a raw `__client` value. */
 export function clientFromString(input) {
-  const text = input.replace(/^cookie:\s*/i, '')
+  const text = input.replace(/^cookie:\s*/i, '').trim()
   const match = /(?:^|;\s*)__client=([^;]+)/.exec(text)
   if (match) return match[1]
+  // A bare value (no `=`, no `;`, not JSON) is already the cookie itself.
+  if (text && !text.includes('=') && !/^[[{]/.test(text)) return text
   try {
     const parsed = JSON.parse(text)
     const list = Array.isArray(parsed) ? parsed : parsed?.cookies
