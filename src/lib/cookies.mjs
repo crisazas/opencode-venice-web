@@ -158,9 +158,17 @@ function candidateKeys(browser) {
 function kwalletKeys(browser) {
   const keys = []
   const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome', 'Chromium']
+  // `kwallet-query` mixes its i18n and "folder does not exist" notices into the
+  // output, so only a line that is not a notice counts as the value.
+  const valueOf = (output) =>
+    (output ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line && !/^kf\.i18n:|does not exist|not found|^The folder/i.test(line))
+      .pop() ?? ''
   const read = (args) => {
     try {
-      const value = execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+      const value = valueOf(execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
       if (value) keys.push(value)
     } catch {
       /* keep trying */
@@ -172,6 +180,7 @@ function kwalletKeys(browser) {
       let listing = ''
       try {
         listing = execFileSync('kwallet-query', ['-l', ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        if (/does not exist|not found/i.test(listing)) continue
       } catch {
         continue
       }
