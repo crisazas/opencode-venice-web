@@ -120,11 +120,13 @@ export function candidatePaths(browser, profile, userDataDir) {
 
 /**
  * Every key worth trying for a cookie DB, in order: the macOS Keychain, the
- * Linux keyring under each plausible label, then the no-keyring default.
+ * Linux keyring under each plausible label, KWallet on KDE, then the
+ * no-keyring default.
  *
- * Labels differ per desktop and browser build, and a closed KWallet makes
- * `secret-tool` return nothing at all, so all of them are attempted and the
- * caller keeps whichever one actually decrypts.
+ * Labels differ per desktop and browser build, KDE keeps the key in kwalletd
+ * rather than in gnome-keyring, and a closed wallet makes every lookup return
+ * nothing at all, so all of them are attempted and the caller keeps whichever
+ * one actually decrypts.
  */
 function candidateKeys(browser) {
   if (process.platform === 'darwin') {
@@ -141,8 +143,41 @@ function candidateKeys(browser) {
       if (error?.code === 'ENOENT') tool = false
     }
   }
+  keys.push(...kwalletKeys(browser))
   keys.push('peanuts')
   return { keys, tool }
+}
+
+/**
+ * Keys held by KWallet, which is where KDE sessions keep the browser secret.
+ * `kwallet-query -l` names the entries of a folder, so the folders worth
+ * looking at are the ones that list a browser entry.
+ */
+function kwalletKeys(browser) {
+  const keys = []
+  const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome', 'Chromium']
+  for (const wallet of ['kdewallet', 'kdewallet5']) {
+    for (const folder of ['', 'Passwords', 'chrome', 'Chrome']) {
+      let listing = ''
+      try {
+        const folderArgs = folder ? ['-f', folder] : []
+        listing = execFileSync('kwallet-query', ['-l', ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!listing.includes(entry)) continue
+        try {
+          const folderArgs = folder ? ['-f', folder] : []
+          const value = execFileSync('kwallet-query', ['-r', entry, ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+          if (value) keys.push(value)
+        } catch {
+          /* keep trying */
+        }
+      }
+    }
+  }
+  return keys
 }
 
 function decrypt(value, key) {
