@@ -5,6 +5,22 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { BROWSERS, findCookies, clientFromString } from '../src/lib/cookies.mjs'
 
+/** Runs `fn` with HOME and TMPDIR pointed at an empty dir, so stray real profiles do not leak in. */
+function sandboxed(fn) {
+  const home = mkdtempSync(path.join(tmpdir(), 'venice-home-'))
+  const previous = { HOME: process.env.HOME, TMPDIR: process.env.TMPDIR }
+  process.env.HOME = home
+  process.env.TMPDIR = home
+  try {
+    return fn(home)
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
 test('every supported browser has the fields readFromBrowser needs', () => {
   for (const browser of Object.values(BROWSERS)) {
     assert.ok(browser.linux && browser.label)
@@ -12,25 +28,16 @@ test('every supported browser has the fields readFromBrowser needs', () => {
 })
 
 test('a profile without a cookie DB is reported as a missing cookie, not a crash', () => {
-  const home = mkdtempSync(path.join(tmpdir(), 'venice-home-'))
-  const previous = process.env.HOME
-  process.env.HOME = home
-  try {
+  sandboxed((home) => {
     // An empty Chrome profile dir: no Cookies file at all.
     mkdirSync(path.join(home, '.config', 'google-chrome', 'Default'), { recursive: true })
     assert.throws(() => findCookies({ browser: 'chrome' }), /no venice.ai cookie/)
     assert.throws(() => findCookies({ browser: 'chrome' }), (error) => !/ENOENT/.test(error.message))
-  } finally {
-    if (previous === undefined) delete process.env.HOME
-    else process.env.HOME = previous
-  }
+  })
 })
 
 test('an unreadable cookie DB names the browser and keeps trying the rest', () => {
-  const home = mkdtempSync(path.join(tmpdir(), 'venice-home-'))
-  const previous = process.env.HOME
-  process.env.HOME = home
-  try {
+  sandboxed((home) => {
     // A Cookies file that is not SQLite: sqlite3 must be invoked and fail cleanly.
     const dir = path.join(home, '.config', 'google-chrome', 'Default')
     mkdirSync(dir, { recursive: true })
@@ -39,10 +46,27 @@ test('an unreadable cookie DB names the browser and keeps trying the rest', () =
       assert.match(error.message, /Chrome: /)
       return true
     })
-  } finally {
-    if (previous === undefined) delete process.env.HOME
-    else process.env.HOME = previous
-  }
+  })
+})
+
+test('--user-data-dir is used as the profile root, without the browser dir under it', () => {
+  sandboxed((home) => {
+    const dir = path.join(home, 'perfil-ajeno')
+    mkdirSync(path.join(dir, 'Default'), { recursive: true })
+    writeFileSync(path.join(dir, 'Default', 'Cookies'), 'not a database')
+    // The DB is reached, so the failure is about SQLite, not "no cookie".
+    assert.throws(() => findCookies({ browser: 'chrome', userDataDir: dir }), /Chrome: SQLITE_NOTADB|Chrome: /)
+    assert.throws(() => findCookies({ browser: 'chrome', userDataDir: dir }), (error) => !/no venice.ai cookie/.test(error.message))
+  })
+})
+
+test('a profile dir outside ~/.config is found by name', () => {
+  sandboxed((home) => {
+    const dir = path.join(home, 'chrome-perfil')
+    mkdirSync(path.join(dir, 'Default'), { recursive: true })
+    writeFileSync(path.join(dir, 'Default', 'Cookies'), 'not a database')
+    assert.throws(() => findCookies({ browser: 'chrome' }), (error) => !/no venice.ai cookie/.test(error.message))
+  })
 })
 
 test('clientFromString accepts a raw value, a Cookie header and a JSON export', () => {

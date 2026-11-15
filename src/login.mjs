@@ -24,6 +24,7 @@ const flag = (name, fallback) => {
 const options = {
   browser: flag('browser'),
   profile: flag('profile'),
+  userDataDir: flag('user-data-dir'),
   cookie: flag('cookie'),
   userAgent: flag('ua'),
 }
@@ -68,7 +69,7 @@ async function main() {
   let source = 'manual'
 
   if (!client) {
-    const found = findCookies({ browser: options.browser, profile: options.profile })
+    const found = findCookies({ browser: options.browser, profile: options.profile, userDataDir: options.userDataDir })
     client = found.client
     userAgent ??= found.userAgent
     source = found.source

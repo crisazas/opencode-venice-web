@@ -217,6 +217,7 @@ Two things the route does to stay usable under Venice's limits: the upload retri
 | `node src/login.mjs` | (re)read the browser cookie and store the session |
 | `node src/login.mjs --browser brave` | pick a browser explicitly |
 | `node src/login.mjs --cookie "__client=…" --ua "Mozilla/5.0 …"` | manual mode for unsupported browsers, missing `sqlite3`, or an empty browser profile |
+| `node src/login.mjs --user-data-dir /tmp/mi-perfil` | Chrome started with `--user-data-dir` (headless, portable, container) |
 | `node src/sync.mjs` | add/update the OpenCode provider |
 | `node src/sync.mjs --default` | also set `model` and `small_model` |
 | `node src/sync.mjs --remove` | remove the provider again |
@@ -303,7 +304,15 @@ systemctl --user restart ai.opencode.venice-web               # Linux
 
 ### "could not read browser cookies"
 
-Automatic mode needs three things: a supported browser, a profile it has actually used, and `sqlite3` on the `PATH`. It skips a browser that has no profile instead of failing, and says so per browser. If every line says `no venice.ai cookie`, no browser here has a venice.ai session - sign in first, or use manual mode:
+Automatic mode needs three things: a supported browser, a profile it has actually used, and `sqlite3` on the `PATH`. It skips a browser that has no profile instead of failing, and says so per browser. If every line says `no venice.ai cookie`, no browser here has a venice.ai session - sign in first, or use manual mode.
+
+Chrome running headless or with a custom `--user-data-dir` (containers, remote boxes, automation profiles) keeps its cookies outside `~/.config`. The login scans `~/.config`, `/tmp` and `/tmp/opencode` for such profiles, and `--user-data-dir` points at one directly:
+
+```sh
+node src/login.mjs --user-data-dir /tmp/opencode/chrome-perfil
+```
+
+Manual mode, when there is no browser on the machine at all:
 
 1. Sign in at <https://venice.ai> in your browser and wait for the chat to load.
 2. Open DevTools -> **Application** -> **Cookies** -> `https://clerk.venice.ai`, and copy the value of `__client`.

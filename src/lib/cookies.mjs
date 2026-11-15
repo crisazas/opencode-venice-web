@@ -12,7 +12,7 @@
  * `--cookie` + `--ua`.
  */
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdtempSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { createDecipheriv, pbkdf2Sync } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
@@ -28,18 +28,82 @@ const COOKIE_HOSTS = ['.clerk.venice.ai', 'clerk.venice.ai', '.venice.ai', 'veni
 
 const profiles = (name) => (name ? [name] : ['Default', 'Profile 1', 'Profile 2', 'Profile 3'])
 
-function candidatePaths(browser, profile) {
+/**
+ * True when the profile DB was encrypted by this browser family. Every Chromium
+ * build writes `v10`/`v11` there, and the family is settled by whether the
+ * cookie actually decrypts, so a loose match is fine.
+ */
+function sameProduct(dir, browser) {
+  try {
+    const db = path.join(dir, 'Default', 'Cookies')
+    if (!existsSync(db)) return false
+    const hex = execFileSync(
+      'sqlite3',
+      [db, "select hex(encrypted_value) from cookies where name='__client' limit 1;"],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim()
+    if (!hex) return false
+    return /^(763130|763131)/.test(hex) // "v10" / "v11"
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Profile dirs that sit outside the usual `~/.config/<browser>`: a Chrome
+ * launched headless or with `--user-data-dir` keeps its profile elsewhere
+ * (often under the temp dir), and those still hold a usable cookie.
+ */
+export function strayProfileDirs(browser) {
+  const dirs = []
+  // Only dirs that look like a profile of this browser: a matching name, or a
+  // `__client` cookie encrypted in the Chromium `v10`/`v11` format. The label is
+  // cosmetic; whether the cookie decrypts is what decides.
+  const wanted = browser.linux.split('/').pop().toLowerCase().replace(/-stable$/, '')
+  // Loose alias so a temp `chrome-perfil` matches Chrome without matching every family.
+  const alias = wanted.replace(/^google-/, '').replace(/-browser$/, '')
+  const roots = [path.join(homedir(), '.config'), tmpdir(), path.join(tmpdir(), 'opencode')]
+  const isProfile = (dir) =>
+    existsSync(path.join(dir, 'Default', 'Cookies')) || existsSync(path.join(dir, 'Local State'))
+  for (const root of roots) {
+    let entries = []
+    try {
+      entries = readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const dir = path.join(root, entry.name)
+      if (!isProfile(dir)) continue
+      const named = entry.name.toLowerCase()
+      // `~/.config/<exact browser dir>` is already covered by the caller; only
+      // keep same-family strays here (e.g. `google-chrome-headless`, a temp
+      // `chrome-perfil`, or a Brave profile under /tmp/opencode).
+      if (named.includes(alias) || sameProduct(dir, browser)) dirs.push(dir)
+    }
+  }
+  return dirs
+}
+
+/**
+ * Profile roots a browser may use, in the order they are tried. `userDataDir`
+ * (from `--user-data-dir`) wins outright: headless and portable Chrome installs
+ * keep the cookie DB somewhere else entirely, and guessing around it is useless.
+ */
+export function candidatePaths(browser, profile, userDataDir) {
   const home = homedir()
+  const base = userDataDir ? [path.resolve(userDataDir.replace(/^~(?=$|\/)/, home))] : null
   if (process.platform === 'darwin') {
     const root = path.join(home, 'Library', 'Application Support', browser.mac)
-    return profiles(profile).map((dir) => path.join(root, dir, 'Cookies'))
+    const dirs = base ?? [root]
+    return dirs.flatMap((dir) => profiles(profile).map((name) => path.join(dir, name, 'Cookies')))
   }
-  const roots = [path.join(home, '.config'), path.join(home, '.var', 'app')]
-  const dirs = []
-  for (const root of roots) {
-    if (browser.linux.includes('/')) dirs.push(path.join(root, browser.linux))
-    else dirs.push(path.join(root, browser.linux))
-  }
+  // `userDataDir` is already the profile root; without it, the browser dir sits under ~/.config.
+  const dirs = base ?? [path.join(home, '.config', browser.linux), path.join(home, '.var', 'app', browser.linux)]
+  // Chrome started headless (`--headless=new`) keeps a separate profile dir, and
+  // a custom `--user-data-dir` may be anywhere (temp dir, /tmp/opencode, ...).
+  if (!base) dirs.push(path.join(home, '.config', `${browser.linux}-headless`), ...strayProfileDirs(browser))
   const out = []
   for (const dir of dirs) for (const prof of profiles(profile === 'Default' ? undefined : profile)) {
     out.push(path.join(dir, prof, 'Cookies'))
@@ -103,9 +167,9 @@ function hasSqlite() {
   }
 }
 
-function readFromBrowser(name, profile) {
+function readFromBrowser(name, profile, userDataDir) {
   const browser = BROWSERS[name]
-  const db = candidatePaths(browser, profile).find(existsSync)
+  const db = candidatePaths(browser, profile, userDataDir).find(existsSync)
   if (!db) return null
   // A profile can exist without ever having stored cookies; do not shell out for nothing.
   if (!hasSqlite()) throw new Error('sqlite3 not found; install it (e.g. `apt install sqlite3`) or pass --cookie/--ua')
@@ -134,13 +198,13 @@ function readFromBrowser(name, profile) {
 }
 
 /** Tries the requested browsers (or all of them) in order. */
-export function findCookies({ browser, profile } = {}) {
+export function findCookies({ browser, profile, userDataDir } = {}) {
   const order = browser ? [browser] : ['brave', 'chrome', 'edge', 'chromium']
   const notes = []
   for (const name of order) {
     if (!BROWSERS[name]) throw new Error(`unknown browser: ${name} (expected ${Object.keys(BROWSERS).join(', ')})`)
     try {
-      const found = readFromBrowser(name, profile)
+      const found = readFromBrowser(name, profile, userDataDir)
       if (found) return found
       notes.push(`${BROWSERS[name].label}: no venice.ai cookie`)
     } catch (error) {
