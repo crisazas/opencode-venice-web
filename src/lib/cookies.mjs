@@ -150,48 +150,77 @@ function candidateKeys(browser) {
 
 /**
  * Keys held by KWallet, which is where KDE sessions keep the browser secret.
- * `kwallet-query -l` names the entries of a folder, so the folders worth
- * looking at are the ones that list a browser entry. Reading takes the entry
- * and its folder before the wallet (`-r <entry> -f <folder> <wallet>`); the
- * other orders are tried too because they differ between versions.
+ *
+ * Both the CLI and the D-Bus API are tried: `kwallet-query` answers "folder X
+ * does not exist" for existing folders on some builds, and the wallet holding
+ * the secret is usually the one named after the browser (`Chrome Keys`) with
+ * the entry `Chrome`. Every value that comes back is pushed and the caller
+ * keeps whichever one decrypts, so a wrong name only costs a failed attempt.
  */
 function kwalletKeys(browser) {
   const keys = []
   const entries = [`${browser.label} Safe Storage`, browser.label, 'Chrome', 'Chromium']
+  const wallets = ['kdewallet', `${browser.label} Keys`, `${browser.label} Safe Storage`]
+  const folders = ['', 'Passwords', 'chrome', 'Chrome', 'Keys']
+
   // `kwallet-query` mixes its i18n and "folder does not exist" notices into the
   // output, so only a line that is not a notice counts as the value.
   const valueOf = (output) =>
     (output ?? '')
       .split('\n')
       .map((line) => line.trim())
-      .filter((line) => line && !/^kf\.i18n:|does not exist|not found|^The folder/i.test(line))
+      .filter((line) => line && !/^kf\.i18n:|does not exist|not found|^The folder|^Failed to read/i.test(line))
       .pop() ?? ''
-  const read = (args) => {
-    try {
-      const value = valueOf(execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
-      if (value) keys.push(value)
-    } catch {
-      /* keep trying */
+
+  for (const wallet of wallets) {
+    for (const folder of folders) {
+      const folderArgs = folder ? ['-f', folder] : []
+      for (const entry of entries) {
+        for (const args of [
+          ['-r', entry, ...folderArgs, wallet],
+          ...(folder ? [['-r', entry, wallet, ...folderArgs], [...folderArgs, '-r', entry, wallet]] : []),
+        ]) {
+          try {
+            const value = valueOf(execFileSync('kwallet-query', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
+            if (value) keys.push(value)
+          } catch {
+            /* keep trying */
+          }
+        }
+      }
     }
   }
-  for (const wallet of ['kdewallet', 'kdewallet5']) {
-    for (const folder of ['', 'Passwords', 'chrome', 'Chrome']) {
-      const folderArgs = folder ? ['-f', folder] : []
-      let listing = ''
-      try {
-        listing = execFileSync('kwallet-query', ['-l', ...folderArgs, wallet], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-        if (/does not exist|not found/i.test(listing)) continue
-      } catch {
-        continue
-      }
+  keys.push(...kwalletDbusKeys(browser, wallets, entries))
+  return keys
+}
+
+/** Same idea over D-Bus, for builds where the CLI cannot reach the wallet. */
+function kwalletDbusKeys(browser, wallets, entries) {
+  const keys = []
+  const svc = 'org.kde.kwalletd5'
+  const obj = '/modules/kwalletd5'
+  const iface = 'org.kde.KWallet'
+  const call = (...args) => {
+    try {
+      return execFileSync('qdbus', [svc, obj, `${iface}.${args[0]}`, ...args.slice(1)], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim()
+    } catch {
+      return ''
+    }
+  }
+  for (const wallet of wallets) {
+    const handle = call('open', wallet, '0', 'venice-web')
+    if (!handle || handle === '-1') continue
+    const folders = [browser.label, 'Keys', 'Passwords', '']
+    for (const folder of folders) {
       for (const entry of entries) {
-        if (!listing.includes(entry)) continue
-        read(['-r', entry, ...folderArgs, wallet])
-        if (!folder) continue
-        read(['-r', entry, wallet, ...folderArgs])
-        read([...folderArgs, '-r', entry, wallet])
+        const value = call('readPassword', handle, folder, entry, 'venice-web')
+        if (value && !/^The folder|does not exist|not found|^Invalid/i.test(value)) keys.push(value)
       }
     }
+    call('close', handle, 'false', 'venice-web')
   }
   return keys
 }
