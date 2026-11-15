@@ -12,7 +12,7 @@
 #   ./install.sh --uninstall     remove code, service and the provider entry
 #   ./install.sh --uninstall --purge   ... and delete the stored session
 #
-#   curl -fsSL https://raw.githubusercontent.com/CanArslanDev/opencode-venice-web/main/install.sh | sh -s -- --default
+#   curl -fsSL https://raw.githubusercontent.com/crisazas/opencode-venice-web/main/install.sh | sh -s -- --default
 #
 # Environment:
 #   VENICE_WEB_INSTALL_DIR  where the code is copied   (default ~/.local/share/opencode-venice-web)
@@ -21,7 +21,7 @@
 #   OPENCODE_CONFIG         opencode.json to patch     (default ~/.config/opencode/opencode.json)
 set -eu
 
-REPO_URL="https://github.com/CanArslanDev/opencode-venice-web.git"
+REPO_URL="https://github.com/crisazas/opencode-venice-web.git"
 LABEL="ai.opencode.venice-web"
 
 XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -130,6 +130,23 @@ for item in src packaging docs package.json README.md CLAUDE.md LICENSE; do
   cp -R "$SOURCE_DIR/$item" "$INSTALL_DIR/$item"
 done
 say "installed code in $INSTALL_DIR"
+
+# ------------------------------------------------------------------- deps
+
+# wreq-js is the only npm dependency (the TLS-fingerprint transport). It ships
+# prebuilt native bindings, so there is no compiler step.
+if [ -f "$INSTALL_DIR/package.json" ]; then
+  if have npm; then
+    say "installing dependencies (wreq-js)"
+    ( cd "$INSTALL_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) \
+      || die "npm install failed in $INSTALL_DIR"
+    if [ ! -d "$INSTALL_DIR/node_modules/wreq-js" ]; then
+      die "wreq-js is missing after npm install; the proxy cannot reach Venice without it"
+    fi
+  else
+    die "npm is required to install wreq-js (it ships with node; check your PATH)"
+  fi
+fi
 
 # ------------------------------------------------------------------- opencode
 
