@@ -123,7 +123,7 @@ export const invalidCallReminder = (problems, available) =>
  * A reply that only announces a lookup: "no veo la imagen, la abro", "déjame
  * verla". Those are not answers, whatever the status says.
  */
-const ANUNCIA_MIRADA =
+export const ANUNCIA_MIRADA =
   /\b(no (veo|tengo|puedo ver)|la (abro|reviso|miro)|déjame (ver|mirar|revisar)|voy a (verla|mirarla|revisarla|abrirla))\b/i
 export const MIRADA_REMINDER =
   'the image is already in the conversation and you have seen it. Answer the request now with what it says; do not announce another lookup.'

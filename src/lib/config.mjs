@@ -6,6 +6,7 @@
  */
 import path from 'node:path'
 import os from 'node:os'
+import { IMAGE_MODEL } from './models.mjs'
 
 const home = os.homedir()
 
@@ -49,6 +50,14 @@ export const providerID = process.env.VENICE_WEB_PROVIDER_ID ?? 'venice-web'
 export const debug = !!process.env.VENICE_WEB_DEBUG
 /** `debug.log` is rotated once it passes this size (see src/lib/log.mjs). */
 export const debugLogMaxBytes = Number(process.env.VENICE_WEB_DEBUG_MAX_BYTES ?? 5 * 1024 * 1024)
+
+/**
+ * Model every image turn is sent to (see models.mjs `IMAGE_MODEL`). `0` keeps
+ * whatever the client asked for.
+ */
+const imageModelRaw = process.env.VENICE_WEB_IMAGE_MODEL
+export const imageModel = imageModelRaw === '0' ? null : (imageModelRaw || IMAGE_MODEL)
+/** `debug.log` is rotated once it passes this size (see src/lib/log.mjs). */
 export const dumpFile = process.env.VENICE_WEB_DUMP
 
 /**

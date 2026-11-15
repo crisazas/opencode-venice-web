@@ -72,3 +72,11 @@ Medición en vivo con Chrome headless (puerto 9222) y su consola, sin adivinar:
 
 - Hacer una edición real desde OpenCode y mirar el journal por si el modelo devuelve texto sin markdown.
 - **`calculator` para `bash` aritmético: hecho y medido.** `bareExpression` pela `echo $((...))`, `echo $[...]` y `python3 -c "print(...)"`, y solo convierte si queda aritmética pura; `bash` entra en la lista por defecto con esa condición. 3/3 el servidor ejecutó `calculator`, `Result: 6691`, sin tool call al cliente. `ls -la`, `git status` y `npm test` siguen yendo al cliente.
+
+## Descripciones de imagen: funcionan (2026-11-15)
+
+Medido en 6 turnos reales con sesion nueva: 6/6 describen la imagen, 0 errores `before initialization`, 3 descripciones conservadas por la rama `kept the description written with the bytes` que antes se perdian en el reintento sin bytes. La rama se alcanza y el turno cierra con `status done` y el texto de la descripcion.
+
+Cambios implicados en `src/lib/server.mjs`: `proseConBytes` se declara y se rellena al parsear el mensaje (con los bytes en la peticion), y la rama de la mirada lo usa cuando la mirada no trae prosa o solo trae el anuncio `ANUNCIA_MIRADA`.
+
+Pendiente aparte: la generacion de imagenes falla aqui y funciona en el bot kimi (`/root/telegram-kimi-bot`, solo lectura).

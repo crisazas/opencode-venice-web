@@ -40,4 +40,14 @@ export const DEFAULT_MODEL = 'deepseek-v4-1-flash-free'
 /** Cheap model for titles/summaries. */
 export const DEFAULT_SMALL_MODEL = 'qwen3-5-35b-a3b'
 
+/**
+ * Model every image turn is sent to, whatever the client asked for. The picture
+ * has to be read for the turn to mean anything, and the model the client picks
+ * for code is not always a vision one; measured across the whole catalogue,
+ * this one described an image every time and is the only vision-language model
+ * in the list. `VENICE_WEB_IMAGE_MODEL` overrides it, `0` keeps the client's
+ * choice.
+ */
+export const IMAGE_MODEL = 'deepseek-v4-1-flash-free'
+
 export const modelIds = Object.keys(MODELS)
